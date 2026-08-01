@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Jolly Driver",
+    "slug": "jolly-driver-mvp",
+    "version": "2.4.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#fff8f4"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jollybakery.driver"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#f59e0b"
+      },
+      "package": "com.jollybakery.driver"
+    },
+    "web": {
+      "favicon": "./assets/icon.png"
+    }
+  }
+}

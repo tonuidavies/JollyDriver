@@ -24,6 +24,9 @@ import CustomerDetail from '../screens/admin/CustomerDetail';
 import InvoicesScreen from '../screens/admin/InvoicesScreen';
 import ReportsScreen from '../screens/admin/ReportsScreen';
 import ReportView from '../screens/admin/ReportView';
+import SchoolDispatchScreen from '../screens/admin/SchoolDispatchScreen';
+import ShortagesScreen from '../screens/admin/ShortagesScreen';
+import CommissionsScreen from '../screens/shared/CommissionsScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -65,6 +68,9 @@ export default function RootNavigator() {
             <Stack.Screen name="Agents" component={AgentsScreen} />
             <Stack.Screen name="Dispatches" component={DispatchesScreen} />
             <Stack.Screen name="CreateDispatch" component={CreateDispatchScreen} />
+            <Stack.Screen name="SchoolDispatch" component={SchoolDispatchScreen} />
+            <Stack.Screen name="Shortages" component={ShortagesScreen} />
+            <Stack.Screen name="Commissions" component={CommissionsScreen} />
             <Stack.Screen name="Customers" component={CustomersScreen} />
             <Stack.Screen name="CustomerDetail" component={CustomerDetail} />
             <Stack.Screen name="Invoices" component={InvoicesScreen} />

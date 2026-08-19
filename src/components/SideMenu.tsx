@@ -22,15 +22,22 @@ const DRIVER_ITEMS: Item[] = [
   { label: 'Dashboard', icon: 'view-dashboard-outline', route: 'Home' },
   { label: 'My Dispatches', icon: 'truck-outline', route: 'Route' },
   { label: 'Collections', icon: 'cash-multiple', route: 'Collections' },
+  { label: 'My Commission', icon: 'percent-outline', route: 'Commissions' },
   { label: 'Profile', icon: 'account-outline', route: 'Profile' },
 ];
-// Full management modules (admin only) — now live.
-const MODULES: Item[] = [
+/** Admin modules, grouped the same way the web sidebar groups them. */
+const FLEET_MODULES: Item[] = [
   { label: 'Dispatches', icon: 'clipboard-list-outline', route: 'Dispatches' },
+  { label: 'New Dispatch', icon: 'plus-box-outline', route: 'CreateDispatch' },
+  { label: 'School Dispatch', icon: 'school-outline', route: 'SchoolDispatch' },
   { label: 'Vehicles', icon: 'truck', route: 'Vehicles' },
   { label: 'Agents', icon: 'account-tie-outline', route: 'Agents' },
-  { label: 'Customers', icon: 'store-outline', route: 'Customers' },
+  { label: 'Schools & Customers', icon: 'store-outline', route: 'Customers' },
+];
+const FINANCE_MODULES: Item[] = [
   { label: 'Invoices', icon: 'file-document-outline', route: 'Invoices' },
+  { label: 'Shortages', icon: 'alert-circle-outline', route: 'Shortages' },
+  { label: 'Commissions', icon: 'percent-outline', route: 'Commissions' },
   { label: 'Reports', icon: 'chart-box-outline', route: 'Reports' },
 ];
 
@@ -103,8 +110,17 @@ export default function SideMenu() {
 
           {activeView === 'admin' && (
             <>
-              <Text style={styles.groupLabel}>MANAGEMENT</Text>
-              {MODULES.map((it) => (
+              <Text style={styles.groupLabel}>FLEET</Text>
+              {FLEET_MODULES.map((it) => (
+                <Pressable key={it.label} style={styles.item} onPress={() => go(it.route)}>
+                  <MaterialCommunityIcons name={it.icon as any} size={22} color={colors.secondary} />
+                  <Text style={styles.itemLabel}>{it.label}</Text>
+                  <Ionicons name="chevron-forward" size={18} color={colors.outlineVariant} />
+                </Pressable>
+              ))}
+
+              <Text style={styles.groupLabel}>FINANCE</Text>
+              {FINANCE_MODULES.map((it) => (
                 <Pressable key={it.label} style={styles.item} onPress={() => go(it.route)}>
                   <MaterialCommunityIcons name={it.icon as any} size={22} color={colors.secondary} />
                   <Text style={styles.itemLabel}>{it.label}</Text>

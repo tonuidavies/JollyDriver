@@ -14,9 +14,15 @@ export type RootStackParamList = {
   Agents: undefined;
   Dispatches: undefined;
   CreateDispatch: undefined;
+  /** Direct-to-school delivery — no route, invoiced and completed in one call */
+  SchoolDispatch: undefined;
   Customers: undefined;
   CustomerDetail: { id: number; name?: string };
   Invoices: undefined;
+  /** Finance → shortages / overpayments over a range */
+  Shortages: undefined;
+  /** Agent commission rates + the earned-commission report */
+  Commissions: undefined;
   Reports: undefined;
   ReportView: { kind: string; title: string };
 };

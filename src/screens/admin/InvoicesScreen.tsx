@@ -3,11 +3,13 @@ import { View, Text, Pressable, StyleSheet, ScrollView, RefreshControl, Alert } 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { Card, ScreenTitleBar, StatusBadge, FormModal, Field } from '../../components';
+import { Card, ScreenTitleBar, StatusBadge, FormModal, Field, Select } from '../../components';
 import { Loading, ErrorState, EmptyState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
-import { useInvoices, useRecordInvoicePayment } from '../../api/hooks';
+import { ymd } from '../../api/dates';
+import { useInvoices, useRecordAccountPayment } from '../../api/hooks';
+import { PaymentMethod } from '../../api/types';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Invoices'>;
@@ -24,13 +26,31 @@ const TONE: Record<string, 'success' | 'partial' | 'pending' | 'error' | 'neutra
   paid: 'success', partially_paid: 'partial', issued: 'pending', overdue: 'error', cancelled: 'neutral',
 };
 
+const METHODS: { label: string; value: PaymentMethod }[] = [
+  { label: 'Cash', value: 'cash' },
+  { label: 'M-Pesa', value: 'mpesa' },
+  { label: 'Till', value: 'till' },
+  { label: 'Cheque', value: 'cheque' },
+  { label: 'Bank transfer', value: 'bank_transfer' },
+];
+
+const REFERENCE_HINT: Record<PaymentMethod, string> = {
+  cash: 'Receipt no. (optional)',
+  mpesa: 'M-Pesa code',
+  till: 'Till code',
+  cheque: 'Cheque number',
+  bank_transfer: 'Bank reference',
+};
+
 export default function InvoicesScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<string | undefined>(undefined);
   const { data, isLoading, isError, refetch, isRefetching } = useInvoices(status);
-  const pay = useRecordInvoicePayment();
+  const pay = useRecordAccountPayment();
   const [payFor, setPayFor] = useState<any | null>(null);
   const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState<PaymentMethod>('cash');
+  const [paidOn, setPaidOn] = useState(ymd());
   const [reference, setReference] = useState('');
 
   const list: any[] = Array.isArray(data) ? data : (data as any)?.data ?? [];
@@ -39,9 +59,20 @@ export default function InvoicesScreen({ navigation }: Props) {
     if (!payFor) return;
     const amt = num(amount);
     if (amt <= 0) return Alert.alert('Enter an amount');
+    const customerId = num(payFor.customer_id ?? payFor.customer?.id);
+    if (!customerId) {
+      return Alert.alert('No customer on this invoice', 'Payments post against the customer account, so this one has to be settled on the web.');
+    }
     pay.mutate(
-      { invoice_id: num(payFor.id ?? payFor.invoice_id), amount: amt, reference: reference || undefined },
-      { onSuccess: () => { setPayFor(null); setAmount(''); setReference(''); refetch(); Alert.alert('Payment recorded'); }, onError: (e) => Alert.alert('Failed', (e as Error).message) }
+      { customer_id: customerId, amount: amt, payment_method: method, paid_on: paidOn || undefined, reference: reference || undefined },
+      {
+        onSuccess: () => {
+          setPayFor(null); setAmount(''); setReference(''); setMethod('cash');
+          refetch();
+          Alert.alert('Payment recorded', 'Posted to the customer account and allocated to their oldest outstanding invoices first.');
+        },
+        onError: (e) => Alert.alert('Failed', (e as Error).message),
+      }
     );
   };
 
@@ -88,15 +119,20 @@ export default function InvoicesScreen({ navigation }: Props) {
             );
           })
         )}
-        <Text style={styles.note}>Tap an unpaid invoice to record a payment.</Text>
+        <Text style={styles.note}>
+          Tap an unpaid invoice to record a payment. Payments post against the customer's account as a whole and are
+          allocated to their oldest outstanding invoices first — any surplus stays as visible account credit.
+        </Text>
       </ScrollView>
 
-      <FormModal visible={!!payFor} title="Record Payment" onClose={() => setPayFor(null)} onSubmit={submitPayment} submitLabel="Record Payment" busy={pay.isPending}>
+      <FormModal visible={!!payFor} title="Record Payment on Account" onClose={() => setPayFor(null)} onSubmit={submitPayment} submitLabel="Record Payment" busy={pay.isPending}>
         {payFor && (
           <>
             <Text style={styles.payFor}>{payFor.invoice_number || `Invoice #${payFor.id}`} · {payFor.customer_name || ''}</Text>
             <Field label="Amount (KES)" value={amount} onChangeText={setAmount} placeholder="0" keyboardType="numeric" />
-            <Field label="Reference" value={reference} onChangeText={setReference} placeholder="Cheque / M-Pesa / bank ref" />
+            <Select label="Method" value={method} options={METHODS} onChange={(v) => setMethod(v as PaymentMethod)} searchable={false} />
+            <Field label="Paid on" value={paidOn} onChangeText={setPaidOn} placeholder="YYYY-MM-DD" />
+            <Field label="Reference" value={reference} onChangeText={setReference} placeholder={REFERENCE_HINT[method]} />
           </>
         )}
       </FormModal>

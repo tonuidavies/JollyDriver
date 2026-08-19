@@ -11,7 +11,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#fff8f4"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.jollybakery.driver"
@@ -21,10 +23,16 @@
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#f59e0b"
       },
-      "package": "com.jollybakery.driver"
+      "package": "com.jollybakery.driver",
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9ef0536e-8a56-48c2-b419-b31c20e3d03c"
+      }
     }
   }
 }

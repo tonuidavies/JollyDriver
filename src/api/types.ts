@@ -172,6 +172,10 @@ export type DispatchDetail = DispatchOrder & {
   items: DispatchItem[];
   sales?: DispatchSale[];
   payments?: DispatchPayment[];
+  /** posted collections, when the server version exposes them */
+  collections?: CollectionEntry[];
+  ledger_entries?: CollectionEntry[];
+  expenses?: DispatchExpense[];
   // reconciliation (any of these may be present depending on server version)
   sold?: number;
   unaccounted?: number;
@@ -192,6 +196,9 @@ export type RecordCollectionResult = {
   balance_after: number;
   sale_status?: string | null;
   reconciliation?: Reconciliation;
+  /** ledger entry id — what void_collection / edit_collection take */
+  entry_id?: number | string;
+  id?: number | string;
 };
 
 export type StkPushResult = {
@@ -246,6 +253,168 @@ export type DispatchReport = {
   net_expected_value?: number;
   status_counts: Record<DispatchStatus, number>;
   dispatches: DispatchOrder[];
+};
+
+// ---- Dispatch expenses ----
+/** Numbers arrive as strings from several endpoints, so money/ids stay loose. */
+export type Num = number | string;
+
+export type ExpenseStatus = 'pending' | 'approved' | 'rejected' | string;
+
+export type ExpenseCategory = {
+  id: Num;
+  name: string;
+  description?: string;
+  status?: string;
+};
+
+export type DispatchExpense = {
+  id: Num;
+  dispatch_id?: Num;
+  expense_category_id?: Num;
+  /** server may name this category_name, category, or expense_category */
+  category_name?: string;
+  category?: string;
+  expense_category?: string;
+  amount: Num;
+  description?: string;
+  status: ExpenseStatus;
+  reason?: string;
+  rejection_reason?: string;
+  created_on?: string;
+  recorded_by?: string;
+  approved_by?: string;
+};
+
+// ---- Collections ledger ----
+/** A single posted collection. Only manual CASH entries can be voided/edited. */
+export type CollectionEntry = {
+  id?: Num;
+  entry_id?: Num;
+  amount: Num;
+  method?: string; // cash | mpesa_manual | mpesa | kcb …
+  source?: string; // MANUAL | KCB/MPESA …
+  transaction_id?: string;
+  receipt_number?: string;
+  notes?: string;
+  status?: string; // posted | voided …
+  created_on?: string;
+};
+
+// ---- Commissions ----
+export type CommissionRate = {
+  product_id: Num;
+  product_name?: string;
+  rate?: Num;
+  rate_type?: 'per_unit' | 'percentage' | string;
+  amount?: Num;
+  route_id?: Num;
+  route_name?: string;
+  /** 'agent' when the agent's own rate wins over the route default */
+  scope?: string;
+};
+
+// ---- Customers / AR ----
+export type Customer = {
+  id: Num;
+  name: string;
+  customer_type?: 'school' | 'other' | string;
+  contact_person?: string;
+  phone?: string;
+  email?: string;
+  physical_address?: string;
+  kra_pin?: string;
+  credit_limit?: Num;
+  payment_terms_days?: Num;
+  /** current outstanding AR balance (name varies by endpoint version) */
+  outstanding?: Num;
+  outstanding_balance?: Num;
+  balance?: Num;
+  ar_balance?: Num;
+  account_credit?: Num;
+  status?: string;
+};
+
+export type InvoiceStatus = 'issued' | 'partially_paid' | 'paid' | 'cancelled' | 'overdue' | string;
+
+export type Invoice = {
+  id: Num;
+  invoice_number?: string;
+  customer_id?: Num;
+  customer_name?: string;
+  delivery_note_number?: string;
+  lpo_number?: string;
+  total?: Num;
+  amount?: Num;
+  paid?: Num;
+  balance?: Num;
+  balance_due?: Num;
+  issued_on?: string;
+  due_date?: string;
+  status: InvoiceStatus;
+};
+
+export type PaymentMethod = 'cash' | 'cheque' | 'mpesa' | 'till' | 'bank_transfer';
+
+// ---- Dashboard endpoints ----
+/**
+ * reports/dashboard_summary. Dispatched + M-Pesa are real-time ("today");
+ * Returned / Cash / Short are only knowable at EOD so the server reports
+ * yesterday's figures for those three — exactly like the admin dashboard.
+ */
+export type DashboardSummaryPayload = {
+  date?: string;
+  collected_today?: Num;
+  collected?: Num;
+  dispatched_today?: Num;
+  dispatched?: Num;
+  returned_yesterday?: Num;
+  returns?: Num;
+  mpesa_today?: Num;
+  mpesa?: Num;
+  cash_yesterday?: Num;
+  cash?: Num;
+  short_yesterday?: Num;
+  shortage?: Num;
+  short?: Num;
+  vehicles_on_road?: Num;
+  vehicles_short?: Num;
+  dispatched_change_pct?: Num;
+  mpesa_change_pct?: Num;
+  [k: string]: unknown;
+};
+
+export type NeedsAttentionPayload = {
+  date?: string;
+  outstanding?: Num;
+  vehicles?: {
+    vehicle_id?: Num;
+    registration_number?: string;
+    vehicle?: string;
+    route?: string;
+    shortage?: Num;
+    agent?: string;
+    [k: string]: unknown;
+  }[];
+  agents_affected?: Num;
+  open_dispatches?: Num;
+  oldest_open_dispatch?: string;
+  overpayment_today?: Num;
+  [k: string]: unknown;
+};
+
+/** reports/summary — period totals + the day-by-day chart series. */
+export type ReportsPeriodSummary = {
+  period?: string;
+  from?: string;
+  to?: string;
+  dispatched?: Num;
+  collected?: Num;
+  shortages?: Num;
+  reports_generated?: Num;
+  days?: { date?: string; day?: string; dispatched?: Num; collected?: Num; shortage?: Num }[];
+  chart?: { date?: string; dispatched?: Num; collected?: Num }[];
+  [k: string]: unknown;
 };
 
 /** short (shortfall) for a route report. Positive = under-collected. */

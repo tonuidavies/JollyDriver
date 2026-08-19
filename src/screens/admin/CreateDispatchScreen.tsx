@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, Switch } from 'react-native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,9 @@ import { ScreenTitleBar, Select, PrimaryButton, Card } from '../../components';
 import { Loading } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
-import { useRoutes, useVehicles, useDrivers, useAgents, useProducts, useCreateDispatch } from '../../api/hooks';
+import {
+  useRoutes, useVehicles, useDrivers, useAgents, useProducts, useCreateDispatch, useDispatchRegister,
+} from '../../api/hooks';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreateDispatch'>;
@@ -30,6 +32,11 @@ export default function CreateDispatchScreen({ navigation }: Props) {
   const [agentId, setAgentId] = useState<number | null>(null);
   const [activate, setActivate] = useState(false);
   const [lines, setLines] = useState<Line[]>([{ key: 'l1', quantity: '', price: '' }]);
+  const [prefilledFrom, setPrefilledFrom] = useState<string | null>(null);
+
+  // The crew that ran this route last time — the app's stand-in for the web's
+  // route assignments, which the mobile API doesn't expose.
+  const register = useDispatchRegister();
 
   const routeOpts = (routes.data ?? []).map((r: any) => ({ label: r.name, value: num(r.id) }));
   const vehicleOpts = (vehicles.data ?? []).map((v: any) => ({ label: v.registration_number, value: num(v.id), sub: [v.make, v.model].filter(Boolean).join(' ') }));
@@ -39,6 +46,39 @@ export default function CreateDispatchScreen({ navigation }: Props) {
   const productOpts = (products.data ?? []).map((p: any) => ({ label: p.name, value: num(p.id), sub: kes(num(p.price)) }));
 
   const productPrice = (pid?: number) => num((products.data ?? []).find((p: any) => num(p.id) === pid)?.price);
+
+  /** Resolve a dispatch's driver/agent (name + id) to the USER id create expects. */
+  const toUserId = (ref: { id?: number; name?: string } | null | undefined, people: any[]) => {
+    if (!ref) return null;
+    const name = String(ref.name ?? '').trim().toLowerCase();
+    if (name) {
+      const hit = people.find(
+        (p) => `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim().toLowerCase() === name
+      );
+      if (hit) return num(hit.user_id ?? hit.id);
+    }
+    // fall back to whatever id the dispatch carried (0 = unassigned)
+    return num(ref.id) || null;
+  };
+
+  // Prefill vehicle / driver / agent from the most recent dispatch on this route.
+  useEffect(() => {
+    if (!routeId) return;
+    const recent = (register.data ?? [])
+      .filter((d) => num(d.route?.id) === routeId)
+      .sort((a, b) => String(b.dispatch_date ?? '').localeCompare(String(a.dispatch_date ?? '')))[0];
+    if (!recent) {
+      setPrefilledFrom(null);
+      return;
+    }
+    const v = num(recent.vehicle?.id) || null;
+    const d = toUserId(recent.driver, (drivers.data ?? []) as any[]);
+    const a = toUserId(recent.agent, (agents.data ?? []) as any[]);
+    if (v) setVehicleId(v);
+    if (d) setDriverId(d);
+    if (a) setAgentId(a);
+    setPrefilledFrom(v || d || a ? recent.order_number ?? recent.dispatch_date ?? null : null);
+  }, [routeId, register.data, drivers.data, agents.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const total = useMemo(() => lines.reduce((s, l) => s + num(l.quantity) * num(l.price), 0), [lines]);
 
@@ -82,6 +122,15 @@ export default function CreateDispatchScreen({ navigation }: Props) {
             <Select label="Driver" value={driverId} options={driverOpts} onChange={(v) => setDriverId(num(v))} placeholder="Select driver" />
             <Select label="Agent" value={agentId} options={agentOpts} onChange={(v) => setAgentId(num(v))} placeholder="Select agent" />
           </View>
+
+          {prefilledFrom && (
+            <View style={styles.prefillNote}>
+              <Ionicons name="sparkles-outline" size={16} color={colors.secondary} />
+              <Text style={styles.prefillText}>
+                Vehicle, driver and agent filled in from this route's last dispatch ({prefilledFrom}). Change any of them if today differs.
+              </Text>
+            </View>
+          )}
 
           <Text style={styles.section}>Load Items</Text>
           {lines.map((l) => (
@@ -134,6 +183,8 @@ export default function CreateDispatchScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   section: { ...type.headlineLgMobile, color: colors.onSurface, marginTop: spacing.xl, marginBottom: spacing.md },
+  prefillNote: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, backgroundColor: colors.surfaceContainerHigh, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.md },
+  prefillText: { ...type.bodySm, color: colors.onSurfaceVariant, flex: 1 },
   lineCard: { marginBottom: spacing.md, gap: spacing.sm },
   lineRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   miniLabel: { ...type.labelSm, color: colors.onSurfaceVariant, marginBottom: spacing.xs },

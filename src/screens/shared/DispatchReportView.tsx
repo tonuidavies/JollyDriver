@@ -6,7 +6,9 @@ import { Screen, Card, ScreenTitleBar, StatusBadge } from '../../components';
 import { Loading, ErrorState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
-import { useDispatchDetail } from '../../api/hooks';
+import { useDispatchDetail, useDispatchExpenses, useMpesaRecon } from '../../api/hooks';
+import { mpesaForDispatch } from '../../api/mpesa';
+import { DispatchExpense } from '../../api/types';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DispatchReport'>;
@@ -15,6 +17,26 @@ const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 export default function DispatchReportView({ route, navigation }: Props) {
   const { id, orderNumber } = route.params;
   const { data, isLoading, isError, error, refetch } = useDispatchDetail(id);
+  const expenses = useDispatchExpenses(id);
+
+  const expenseRows: DispatchExpense[] = useMemo(() => {
+    const raw = (expenses.data ?? []) as any;
+    return Array.isArray(raw) ? raw : raw?.data ?? [];
+  }, [expenses.data]);
+
+  const approvedTotal = useMemo(
+    () => expenseRows.filter((e) => String(e.status).toLowerCase() === 'approved').reduce((s, e) => s + num(e.amount), 0),
+    [expenseRows]
+  );
+
+  // No per-dispatch payments endpoint exists, so pull the day's M-Pesa/KCB
+  // reconciliation and pick out this dispatch's rows.
+  const day = data?.dispatch_date;
+  const mpesa = useMpesaRecon({ from: day, to: day, limit: 0 }, !!day);
+  const txns = useMemo(
+    () => mpesaForDispatch(mpesa.data, { id, order_number: data?.order_number, route: data?.route }),
+    [mpesa.data, id, data?.order_number, data?.route]
+  );
 
   const totals = useMemo(() => {
     const items = data?.items ?? [];
@@ -85,9 +107,92 @@ export default function DispatchReportView({ route, navigation }: Props) {
         </View>
       </Card>
 
+      {/* Expenses claimed against this dispatch */}
+      {expenseRows.length > 0 && (
+        <>
+          <Text style={styles.section}>Expenses</Text>
+          <Card padded={false} style={{ overflow: 'hidden' }}>
+            <View style={[styles.tr, styles.th]}>
+              <Text style={[styles.cell, styles.thText, { flex: 3 }]}>Category</Text>
+              <Text style={[styles.cell, styles.thText, styles.right]}>Status</Text>
+              <Text style={[styles.cell, styles.thText, styles.right, { flex: 1.5 }]}>Amount</Text>
+            </View>
+            {expenseRows.map((e, i) => {
+              const st = String(e.status ?? 'pending').toLowerCase();
+              return (
+                <View key={`${e.id}-${i}`} style={styles.tr}>
+                  <Text style={[styles.cell, { flex: 3 }]} numberOfLines={1}>
+                    {e.category_name ?? e.category ?? e.expense_category ?? 'Expense'}
+                  </Text>
+                  <Text style={[styles.cell, styles.right, { color: st === 'approved' ? colors.success : st === 'rejected' ? colors.error : colors.onSurfaceVariant }]}>
+                    {st}
+                  </Text>
+                  <Text style={[styles.cell, styles.right, styles.mono, { flex: 1.5 }]}>{kes(num(e.amount), false)}</Text>
+                </View>
+              );
+            })}
+            <View style={[styles.tr, styles.totalRow]}>
+              <Text style={[styles.cell, { flex: 3, fontFamily: fonts.sansBold }]}>Approved (deducted)</Text>
+              <Text style={[styles.cell, styles.right, styles.mono, { flex: 2.5, color: colors.primary }]}>{kes(approvedTotal)}</Text>
+            </View>
+          </Card>
+          <Text style={styles.note}>Only approved expenses reduce what the dispatch is expected to bring back.</Text>
+        </>
+      )}
+
+      {/* M-Pesa / KCB transactions */}
+      <Text style={styles.section}>M-Pesa Transactions</Text>
+      {mpesa.isLoading ? (
+        <Card><Text style={styles.metaLabel}>Loading transactions…</Text></Card>
+      ) : txns.rows.length === 0 ? (
+        <Card>
+          <Text style={styles.metaLabel}>
+            {mpesa.isError
+              ? 'Transaction feed unavailable.'
+              : 'No M-Pesa or KCB transactions matched to this dispatch.'}
+          </Text>
+        </Card>
+      ) : (
+        <>
+          <Card padded={false} style={{ overflow: 'hidden' }}>
+            <View style={[styles.tr, styles.th]}>
+              <Text style={[styles.cell, styles.thText, { flex: 2.4 }]}>Receipt</Text>
+              <Text style={[styles.cell, styles.thText, { flex: 2 }]}>Payer</Text>
+              <Text style={[styles.cell, styles.thText, styles.right, { flex: 1.6 }]}>Amount</Text>
+            </View>
+            {txns.rows.map((t, i) => (
+              <View key={`${t.receipt}-${i}`} style={styles.tr}>
+                <View style={{ flex: 2.4 }}>
+                  <Text style={[styles.cell, styles.mono, { paddingHorizontal: 0 }]} numberOfLines={1}>{t.receipt}</Text>
+                  {!!t.time && <Text style={styles.txnMeta} numberOfLines={1}>{t.time}</Text>}
+                </View>
+                <View style={{ flex: 2 }}>
+                  <Text style={[styles.cell, { paddingHorizontal: 0 }]} numberOfLines={1}>{t.name || t.phone || '—'}</Text>
+                  {!!t.till && <Text style={styles.txnMeta} numberOfLines={1}>{t.till}</Text>}
+                </View>
+                <View style={{ flex: 1.6, alignItems: 'flex-end' }}>
+                  <Text style={[styles.cell, styles.mono, { paddingHorizontal: 0 }]}>{kes(t.amount, false)}</Text>
+                  <Text style={[styles.txnMeta, { color: t.matched ? colors.success : colors.error }]}>
+                    {t.matched ? 'matched' : 'unmatched'}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            <View style={[styles.tr, styles.totalRow]}>
+              <Text style={[styles.cell, { flex: 3, fontFamily: fonts.sansBold }]}>Total received</Text>
+              <Text style={[styles.cell, styles.right, styles.mono, { flex: 3, color: colors.primary }]}>{kes(txns.total)}</Text>
+            </View>
+          </Card>
+          <Text style={styles.note}>
+            {txns.scope === 'dispatch'
+              ? 'Matched to this dispatch by the reconciliation feed.'
+              : `Same-day payments on the ${data.route?.name ?? 'route'} till — the feed didn't tag them to a dispatch, so treat them as route-level.`}
+          </Text>
+        </>
+      )}
+
       <Text style={styles.note}>
-        Line-by-line matched M-Pesa/KCB payments print on the web report; the mobile API returns the reconciled
-        totals above. (A per-dispatch payments endpoint would let me list each receipt here too.)
+        Cash and manual entries aren't in this list — they show in the reconciled totals above.
       </Text>
 
       <View style={styles.sign}>
@@ -126,6 +231,7 @@ const styles = StyleSheet.create({
   reconLabel: { ...type.labelSm, color: colors.onSurfaceVariant },
   reconValue: { ...type.metricXl, fontSize: 20, color: colors.onSurface, marginTop: spacing.xs },
 
+  txnMeta: { ...type.labelSm, fontSize: 10, color: colors.onSurfaceVariant },
   tr: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.outlineVariant },
   th: { backgroundColor: colors.surfaceContainerHigh, borderTopWidth: 0 },
   thText: { ...type.labelSm, color: colors.onSurfaceVariant },

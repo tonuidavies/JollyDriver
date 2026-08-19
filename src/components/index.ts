@@ -11,5 +11,6 @@ export { default as DispatchCard } from './DispatchCard';
 export { default as Select } from './Select';
 export { default as FormModal } from './FormModal';
 export { default as Field } from './Field';
+export { default as RangeChips } from './RangeChips';
 export type { BadgeTone } from './StatusBadge';
 export type { Option } from './Select';

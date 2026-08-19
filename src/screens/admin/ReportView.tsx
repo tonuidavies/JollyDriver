@@ -1,31 +1,40 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { Card, ScreenTitleBar } from '../../components';
+import { Card, ScreenTitleBar, RangeChips } from '../../components';
 import { Loading, ErrorState, EmptyState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
+import { rangeFor, currentMonth, RangePreset } from '../../api/dates';
 import * as api from '../../api/endpoints';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReportView'>;
 
-const FETCHERS: Record<string, () => Promise<any>> = {
-  daily_recon: () => api.dailyRecon({}),
-  weekly_sales: () => api.weeklySales({}),
-  shortage: () => api.shortageReport({}),
-  overpayment: () => api.overpaymentReport({}),
-  mpesa_recon: () => api.mpesaRecon({}),
-  route_performance: () => api.routePerformance({}),
-  agent_performance: () => api.agentPerformance({}),
-  lpo_sales: () => api.lpoSales({}),
-  monthly_sales_by_vehicle: () => api.monthlySalesByVehicle({}),
-  summary: () => api.reportsSummary('7d'),
-  needs_attention: () => api.needsAttention(),
+type Range = { from: string; to: string };
+
+/** Each report takes the picked range in whatever shape its endpoint expects. */
+const FETCHERS: Record<string, (r: Range, preset: RangePreset) => Promise<any>> = {
+  daily_recon: (r) => api.dailyRecon({ date: r.to }),
+  weekly_sales: (r) => api.weeklySales(r),
+  shortage: (r) => api.shortageReport(r),
+  overpayment: (r) => api.overpaymentReport(r),
+  mpesa_recon: (r) => api.mpesaRecon({ ...r, limit: 0 }),
+  route_performance: (r) => api.routePerformance(r),
+  agent_performance: (r) => api.agentPerformance(r),
+  lpo_sales: (r) => api.lpoSales(r),
+  commission: (r) => api.commissionReport(r),
+  cashflow: (r) => api.cashflowReport(r),
+  monthly_sales_by_vehicle: () => api.monthlySalesByVehicle({ month: currentMonth() }),
+  summary: (_r, preset) => api.reportsSummary(preset === '30d' ? '30d' : preset === '90d' ? '90d' : '7d'),
+  needs_attention: (r) => api.needsAttention(r.to),
 };
+
+/** Reports that ignore the range picker entirely. */
+const NO_RANGE = new Set(['monthly_sales_by_vehicle']);
 
 const MONEY = /(value|total|collected|dispatched|amount|shortage|revenue|sales|overpay|balance|net|expected|cash|mpesa|paid|lpo)/i;
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : NaN);
@@ -48,10 +57,16 @@ function labelize(k: string): string {
 export default function ReportView({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { kind, title } = route.params;
-  const fetcher = FETCHERS[kind] ?? (() => Promise.resolve(null));
-  const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({ queryKey: ['reportview', kind], queryFn: fetcher });
+  const [preset, setPreset] = useState<RangePreset>(kind === 'daily_recon' || kind === 'needs_attention' ? 'today' : '7d');
+  const range = rangeFor(preset);
+  const fetcher = FETCHERS[kind];
+  const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
+    queryKey: ['reportview', kind, preset],
+    queryFn: () => (fetcher ? fetcher(range, preset) : Promise.resolve(null)),
+  });
 
-  const payload = (data as any) ?? {};
+  // some endpoints return a bare array once the envelope is unwrapped
+  const payload: any = Array.isArray(data) ? { rows: data } : (data as any) ?? {};
   const scalars = Object.entries(payload).filter(([, v]) => v == null || typeof v !== 'object');
   const objects = Object.entries(payload).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v));
   const arrays = Object.entries(payload).filter(([, v]) => Array.isArray(v)) as [string, any[]][];
@@ -64,6 +79,15 @@ export default function ReportView({ route, navigation }: Props) {
       showsVerticalScrollIndicator={false}
     >
       <ScreenTitleBar title={title} onBack={() => navigation.goBack()} showSync={false} />
+
+      {!NO_RANGE.has(kind) && (
+        <>
+          <RangeChips value={preset} onChange={setPreset} />
+          <Text style={styles.rangeNote}>
+            {kind === 'daily_recon' || kind === 'needs_attention' ? range.to : `${range.from} → ${range.to}`}
+          </Text>
+        </>
+      )}
 
       {isLoading ? <Loading label="Running report…" /> : isError ? <ErrorState message={(error as Error)?.message} onRetry={refetch} /> : (
         <>
@@ -139,6 +163,7 @@ function RowCard({ row }: { row: any }) {
 }
 
 const styles = StyleSheet.create({
+  rangeNote: { ...type.bodySm, color: colors.onSurfaceVariant, marginBottom: spacing.md },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   kpi: { width: '47%', flexGrow: 1, backgroundColor: colors.surfaceContainerLowest, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.outlineVariant },
   kpiLabel: { ...type.labelSm, color: colors.onSurfaceVariant },

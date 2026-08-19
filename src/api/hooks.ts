@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as api from './endpoints';
-import { fetchDashboardSummary } from './summary';
+import { fetchDashboardSummary, fetchAdminDashboard } from './summary';
 import { ymd } from './dates';
 import { DispatchStatus, CollectionMethod } from './types';
 
@@ -133,6 +133,11 @@ export function useRecordSale() {
     onSuccess: (_d, vars) => {
       client.invalidateQueries({ queryKey: qk.dispatch(vars.dispatch_id) });
       client.invalidateQueries({ queryKey: ['report'] });
+      // an LPO sale is invoiced immediately, which also moves the customer's AR
+      if (vars.sale_type === 'lpo') {
+        client.invalidateQueries({ queryKey: ['invoices'] });
+        client.invalidateQueries({ queryKey: ['customers'] });
+      }
     },
   });
 }
@@ -212,8 +217,13 @@ export function useCreateDispatch() {
 }
 
 // ---- Customers ----
-export function useCustomerSearch(term: string) {
-  return useQuery({ queryKey: ['customers', 'search', term], queryFn: () => api.searchCustomers(term || undefined) });
+export function useCustomerSearch(term: string, enabled = true) {
+  return useQuery({
+    queryKey: ['customers', 'search', term],
+    queryFn: () => api.searchCustomers(term || undefined),
+    enabled,
+    staleTime: 60_000,
+  });
 }
 export function useCustomer(id: number | undefined) {
   return useQuery({ queryKey: ['customers', 'get', id ?? -1], queryFn: () => api.getCustomer(id as number), enabled: typeof id === 'number' && id > 0 });
@@ -223,20 +233,24 @@ export function useCreateCustomer() {
   return useMutation({ mutationFn: api.createCustomer, onSuccess: () => c.invalidateQueries({ queryKey: ['customers'] }) });
 }
 
-// ---- Invoices ----
+// ---- Invoices / AR ----
 export function useInvoices(status?: string) {
   return useQuery({ queryKey: ['invoices', 'list', status ?? 'all'], queryFn: () => api.listInvoices(status) });
 }
-export function useUninvoiced(customerId: number | undefined) {
-  return useQuery({ queryKey: ['invoices', 'uninvoiced', customerId ?? -1], queryFn: () => api.uninvoicedSales({ customer_id: customerId as number }), enabled: typeof customerId === 'number' && customerId > 0 });
-}
-export function useCreateInvoice() {
+/**
+ * Payments post against the customer's ACCOUNT (not one invoice) and are
+ * auto-allocated oldest-first; anything left over stays as visible credit.
+ */
+export function useRecordAccountPayment() {
   const c = useQueryClient();
-  return useMutation({ mutationFn: api.createInvoice, onSuccess: () => c.invalidateQueries({ queryKey: ['invoices'] }) });
-}
-export function useRecordInvoicePayment() {
-  const c = useQueryClient();
-  return useMutation({ mutationFn: api.recordInvoicePayment, onSuccess: () => c.invalidateQueries({ queryKey: ['invoices'] }) });
+  return useMutation({
+    mutationFn: api.recordAccountPayment,
+    onSuccess: () => {
+      c.invalidateQueries({ queryKey: ['invoices'] });
+      c.invalidateQueries({ queryKey: ['customers'] });
+      c.invalidateQueries({ queryKey: ['report'] });
+    },
+  });
 }
 
 // ---- Reports (generic) ----
@@ -245,12 +259,12 @@ export const useDailyRecon = (date = ymd(), status?: string) =>
   useQuery({ queryKey: ['report', 'daily_recon', date, status], queryFn: () => api.dailyRecon({ date, status }) });
 export const useWeeklySales = (p: RangeQ = {}) =>
   useQuery({ queryKey: ['report', 'weekly_sales', p], queryFn: () => api.weeklySales(p) });
-export const useShortage = (p: { from?: string; to?: string; vehicle_id?: number } = {}) =>
-  useQuery({ queryKey: ['report', 'shortage', p], queryFn: () => api.shortageReport(p) });
-export const useOverpayment = (p: { from?: string; to?: string; vehicle_id?: number } = {}) =>
-  useQuery({ queryKey: ['report', 'overpayment', p], queryFn: () => api.overpaymentReport(p) });
-export const useMpesaRecon = (p: { from?: string; to?: string; limit?: number } = {}) =>
-  useQuery({ queryKey: ['report', 'mpesa_recon', p], queryFn: () => api.mpesaRecon(p) });
+export const useShortage = (p: { from?: string; to?: string; vehicle_id?: number } = {}, enabled = true) =>
+  useQuery({ queryKey: ['report', 'shortage', p], queryFn: () => api.shortageReport(p), enabled });
+export const useOverpayment = (p: { from?: string; to?: string; vehicle_id?: number } = {}, enabled = true) =>
+  useQuery({ queryKey: ['report', 'overpayment', p], queryFn: () => api.overpaymentReport(p), enabled });
+export const useMpesaRecon = (p: { from?: string; to?: string; limit?: number } = {}, enabled = true) =>
+  useQuery({ queryKey: ['report', 'mpesa_recon', p], queryFn: () => api.mpesaRecon(p), enabled });
 export const useRoutePerformanceReport = (p: RangeQ = {}) =>
   useQuery({ queryKey: ['report', 'route_perf', p], queryFn: () => api.routePerformance(p) });
 export const useAgentPerformance = (p: RangeQ = {}) =>
@@ -263,3 +277,82 @@ export const useReportsSummary = (period: '7d' | '30d' | '90d' = '7d') =>
   useQuery({ queryKey: ['report', 'summary', period], queryFn: () => api.reportsSummary(period) });
 export const useNeedsAttention = (date = ymd()) =>
   useQuery({ queryKey: ['report', 'needs_attention', date], queryFn: () => api.needsAttention(date) });
+export const useCommissionReport = (p: { from?: string; to?: string; agent_id?: number } = {}, enabled = true) =>
+  useQuery({ queryKey: ['report', 'commission', p], queryFn: () => api.commissionReport(p), enabled });
+export const useCashflow = (p: { from?: string; to?: string } = {}) =>
+  useQuery({ queryKey: ['report', 'cashflow', p], queryFn: () => api.cashflowReport(p) });
+export const useVehicleMonthDetail = (vehicleId: number | undefined, month?: string) =>
+  useQuery({
+    queryKey: ['report', 'vehicle_month', vehicleId ?? -1, month ?? 'current'],
+    queryFn: () => api.vehicleMonthDetail({ vehicle_id: vehicleId as number, month }),
+    enabled: typeof vehicleId === 'number' && vehicleId > 0,
+  });
+
+// ---- Dispatch expenses ----
+export const useExpenseCategories = () =>
+  useQuery({ queryKey: ['expense_categories'], queryFn: api.listExpenseCategories, staleTime: 10 * 60_000 });
+
+export const useDispatchExpenses = (dispatchId: number | undefined) =>
+  useQuery({
+    queryKey: ['dispatch', 'expenses', dispatchId ?? -1],
+    queryFn: () => api.listDispatchExpenses(dispatchId as number),
+    enabled: typeof dispatchId === 'number' && dispatchId > 0,
+  });
+
+function useExpenseMutation<TVars>(fn: (v: TVars) => Promise<any>) {
+  const c = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      c.invalidateQueries({ queryKey: ['dispatch'] });
+      c.invalidateQueries({ queryKey: ['report'] });
+    },
+  });
+}
+
+export const useRecordExpense = () => useExpenseMutation(api.recordExpense);
+export const useApproveExpense = () => useExpenseMutation((expenseId: number) => api.approveExpense(expenseId));
+export const useRejectExpense = () =>
+  useExpenseMutation(({ expenseId, reason }: { expenseId: number; reason?: string }) => api.rejectExpense(expenseId, reason));
+
+// ---- Collection corrections ----
+export function useVoidCollection() {
+  const c = useQueryClient();
+  return useMutation({
+    mutationFn: ({ entryId, reason }: { entryId: number; reason?: string }) => api.voidCollection(entryId, reason),
+    onSuccess: () => { c.invalidateQueries({ queryKey: ['dispatch'] }); c.invalidateQueries({ queryKey: ['report'] }); },
+  });
+}
+export function useEditCollection() {
+  const c = useQueryClient();
+  return useMutation({
+    mutationFn: api.editCollection,
+    onSuccess: () => { c.invalidateQueries({ queryKey: ['dispatch'] }); c.invalidateQueries({ queryKey: ['report'] }); },
+  });
+}
+
+// ---- School dispatch ----
+export function useCreateSchoolDispatch() {
+  const c = useQueryClient();
+  return useMutation({
+    mutationFn: api.createSchoolDispatch,
+    onSuccess: () => {
+      c.invalidateQueries({ queryKey: ['dispatch'] });
+      c.invalidateQueries({ queryKey: ['invoices'] });
+      c.invalidateQueries({ queryKey: ['report'] });
+    },
+  });
+}
+
+// ---- Commissions ----
+export const useMyCommissionRates = () =>
+  useQuery({ queryKey: ['commissions', 'my_rates'], queryFn: api.myCommissionRates, staleTime: 10 * 60_000 });
+
+// ---- Admin dashboard (real endpoints, with a client-side fallback) ----
+export function useAdminDashboard(date = ymd()) {
+  return useQuery({
+    queryKey: ['dashboard', 'admin', date],
+    queryFn: () => fetchAdminDashboard(date),
+    staleTime: 60_000,
+  });
+}

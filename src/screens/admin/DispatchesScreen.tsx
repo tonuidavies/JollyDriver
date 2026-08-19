@@ -54,10 +54,16 @@ export default function DispatchesScreen({ navigation }: Props) {
         )}
       </ScrollView>
 
-      <Pressable style={styles.fab} onPress={() => navigation.navigate('CreateDispatch')}>
-        <Ionicons name="add" size={26} color={colors.onPrimary} />
-        <Text style={styles.fabText}>New</Text>
-      </Pressable>
+      <View style={styles.fabStack}>
+        <Pressable style={styles.fabSecondary} onPress={() => navigation.navigate('SchoolDispatch')}>
+          <Ionicons name="school-outline" size={22} color={colors.onSecondaryFixed} />
+          <Text style={styles.fabSecondaryText}>School</Text>
+        </Pressable>
+        <Pressable style={styles.fab} onPress={() => navigation.navigate('CreateDispatch')}>
+          <Ionicons name="add" size={26} color={colors.onPrimary} />
+          <Text style={styles.fabText}>New</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -67,6 +73,9 @@ const styles = StyleSheet.create({
   tab: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.full, backgroundColor: colors.surfaceContainerHigh },
   tabActive: { backgroundColor: colors.primaryContainer },
   tabText: { ...type.bodySm, fontFamily: type.titleMd.fontFamily, color: colors.onSurfaceVariant },
-  fab: { position: 'absolute', right: spacing.lg, bottom: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.lg, height: 56, borderRadius: 28, backgroundColor: colors.primary, ...shadows.level2, justifyContent: 'center' },
+  fabStack: { position: 'absolute', right: spacing.lg, bottom: spacing.lg, alignItems: 'flex-end', gap: spacing.sm },
+  fab: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.lg, height: 56, borderRadius: 28, backgroundColor: colors.primary, ...shadows.level2, justifyContent: 'center' },
   fabText: { ...type.titleMd, color: colors.onPrimary },
+  fabSecondary: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.md, height: 46, borderRadius: 23, backgroundColor: colors.primaryContainer, ...shadows.level1, justifyContent: 'center' },
+  fabSecondaryText: { ...type.bodySm, color: colors.onSecondaryFixed },
 });

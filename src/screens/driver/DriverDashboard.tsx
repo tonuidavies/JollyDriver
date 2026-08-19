@@ -126,6 +126,15 @@ export default function DriverDashboard({ navigation }: Props) {
                     : navigation.navigate('Route')
                 }
               />
+
+              <PrimaryButton
+                label="My Commission"
+                variant="secondary"
+                icon="pricetags-outline"
+                iconRight={false}
+                style={{ marginTop: spacing.md, borderRadius: radius.full }}
+                onPress={() => navigation.navigate('Commissions')}
+              />
             </>
           )}
         </>

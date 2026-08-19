@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet, ScrollView, RefreshControl } from 'react-native';
-import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CompositeScreenProps } from '@react-navigation/native';
 import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -11,7 +11,7 @@ import DispatchCard from '../../components/DispatchCard';
 import { Loading, ErrorState, EmptyState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes, kesShort } from '../../utils/format';
-import { useDashboardSummary, useDispatchReport, useDispatches } from '../../api/hooks';
+import { useAdminDashboard, useDispatchReport, useDispatches } from '../../api/hooks';
 import { useAuth } from '../../context/AuthContext';
 import { prettyDate } from '../../api/dates';
 import { AdminTabsParamList, RootStackParamList } from '../../navigation/types';
@@ -24,17 +24,21 @@ type Props = CompositeScreenProps<
 export default function AdminDashboard({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const summary = useDashboardSummary();
+  const dash = useAdminDashboard();
   const report = useDispatchReport();
   const active = useDispatches(undefined, 'active');
 
-  const t = summary.data?.totals;
-  const worst = (summary.data?.routes ?? []).filter((r) => r.dispatched > 0 || r.collected > 0).slice(0, 8);
+  const k = dash.data?.kpis;
+  const attention = dash.data?.attention;
+  const routes = dash.data?.routes ?? [];
+  const worst = routes.filter((r) => r.dispatched > 0 || r.collected > 0).slice(0, 8);
+  const trend = dash.data?.trend ?? [];
+  const tills = dash.data?.mpesaByTill ?? [];
   const counts = report.data?.status_counts;
   const activeList = active.data ?? [];
 
   const refreshAll = () => {
-    summary.refetch();
+    dash.refetch();
     report.refetch();
     active.refetch();
   };
@@ -43,55 +47,109 @@ export default function AdminDashboard({ navigation }: Props) {
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
       contentContainerStyle={{ paddingTop: insets.top + spacing.sm, paddingHorizontal: spacing.marginMobile, paddingBottom: spacing.xl }}
-      refreshControl={<RefreshControl refreshing={summary.isRefetching} onRefresh={refreshAll} tintColor={colors.primary} />}
+      refreshControl={<RefreshControl refreshing={dash.isRefetching} onRefresh={refreshAll} tintColor={colors.primary} />}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Avatar initials={(user?.first_name?.[0] ?? 'A') + (user?.last_name?.[0] ?? '')} size={48} ring />
           <View>
-            <Text style={styles.title}>Good evening, {user?.first_name ?? 'Admin'}</Text>
+            <Text style={styles.title}>Good day, {user?.first_name ?? 'Admin'}</Text>
             <Text style={styles.date}>{prettyDate()}</Text>
           </View>
         </View>
         <SyncIcon />
       </View>
 
-      {summary.isLoading ? (
-        <Loading label="Rolling up all routes…" />
-      ) : summary.isError ? (
-        <ErrorState message={(summary.error as Error)?.message} onRetry={refreshAll} />
+      {dash.isLoading ? (
+        <Loading label="Pulling today's figures…" />
+      ) : dash.isError ? (
+        <ErrorState message={(dash.error as Error)?.message} onRetry={refreshAll} />
       ) : (
         <>
-          {/* Collected hero */}
+          {/* Collected hero — mirrors the web dashboard's hero band */}
           <View style={styles.hero}>
             <Text style={styles.heroLabel}>COLLECTED TODAY</Text>
-            <Text style={styles.heroValue}>{kes(t?.collected ?? 0)}</Text>
+            <Text style={styles.heroValue}>{kes(k?.collectedToday ?? 0)}</Text>
             <Text style={styles.heroSub}>
-              across {summary.data?.routes.length ?? 0} routes · {t?.routesShort ?? 0} short
+              {(k?.vehiclesShort ?? 0) > 0
+                ? `${k?.vehiclesShort} vehicle${k?.vehiclesShort === 1 ? '' : 's'} short today`
+                : 'No vehicles short today'}
+              {k?.vehiclesOnRoad ? ` · ${k.vehiclesOnRoad} on the road` : ''}
             </Text>
           </View>
 
-          {/* KPI grid */}
+          {/* KPI grid. Dispatched + M-Pesa are live; Returned / Cash / Short are
+              only known at EOD, so the server reports yesterday for those. */}
           <View style={styles.kpiRow}>
-            <Kpi icon="cube-outline" label="Dispatched" value={kes(t?.dispatched ?? 0, false)} />
-            <Kpi icon="swap-vertical-outline" label="Net Position" value={kes(t?.netPosition ?? 0, false)} tone={(t?.netPosition ?? 0) > 0 ? colors.error : colors.success} />
+            <Kpi icon="cube-outline" label="Dispatched" period="TODAY" value={kes(k?.dispatchedToday ?? 0, false)} delta={k?.dispatchedChangePct ?? null} />
+            <Kpi icon="cellphone-check" label="M-Pesa" period="TODAY" value={kes(k?.mpesaToday ?? 0, false)} delta={k?.mpesaChangePct ?? null} tone={colors.tertiary} />
           </View>
           <View style={styles.kpiRow}>
-            <Kpi icon="alert-circle-outline" label="Shortages" value={kes(t?.shortages ?? 0, false)} tone={(t?.shortages ?? 0) > 0 ? colors.error : colors.success} />
-            <Kpi icon="cash-multiple" label="Returns" value={kes(t?.returns ?? 0, false)} />
+            <Kpi icon="package-variant-closed" label="Returned" period="YESTERDAY" value={kes(k?.returnedYesterday ?? 0, false)} />
+            <Kpi icon="cash-multiple" label="Cash" period="YESTERDAY" value={kes(k?.cashYesterday ?? 0, false)} />
+          </View>
+          <View style={styles.kpiRow}>
+            <Kpi
+              icon="alert-circle-outline"
+              label="Short"
+              period="YESTERDAY"
+              value={kes(k?.shortYesterday ?? 0, false)}
+              tone={(k?.shortYesterday ?? 0) > 0 ? colors.error : colors.success}
+            />
+            <Kpi icon="map-marker-path" label="Routes Active" period="TODAY" value={String(routes.length)} />
           </View>
 
-          <Text style={styles.note}>
-            "Collected" is combined cash + M-Pesa. A dedicated M-Pesa-by-till figure and the 7-day trend
-            need backend endpoints (details in the chat).
-          </Text>
+          {dash.data?.degraded && (
+            <Text style={styles.note}>
+              Live KPI endpoint unavailable — these figures are rolled up from route performance.
+            </Text>
+          )}
+
+          {/* Needs attention */}
+          <View style={styles.sectionHead}>
+            <Text style={styles.section}>Needs Attention</Text>
+            {attention ? <Text style={styles.badgeCount}>{attention.vehicles.length}</Text> : null}
+          </View>
+          <Card style={styles.attentionCard}>
+            {!attention ? (
+              <Text style={styles.attentionOk}>Attention feed unavailable.</Text>
+            ) : attention.vehicles.length === 0 ? (
+              <>
+                <Text style={styles.attentionOk}>Nothing needs attention right now.</Text>
+                {attention.openDispatches > 0 && (
+                  <Text style={styles.attentionMeta}>
+                    {attention.openDispatches} dispatch{attention.openDispatches === 1 ? '' : 'es'} still open, no EOD done yet
+                    {attention.oldestOpen ? ` (since ${attention.oldestOpen})` : ''}
+                  </Text>
+                )}
+              </>
+            ) : (
+              <>
+                <Text style={styles.attentionTotal}>{kes(attention.outstanding)} outstanding</Text>
+                {attention.vehicles.slice(0, 6).map((v, i) => (
+                  <View key={`${v.name}-${i}`} style={styles.attentionRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.attentionName}>{v.name}</Text>
+                      <Text style={styles.attentionMeta}>{v.route} · {v.agent}</Text>
+                    </View>
+                    <Text style={styles.attentionAmt}>{kes(v.shortage, false)}</Text>
+                  </View>
+                ))}
+                <Text style={styles.attentionMeta}>
+                  {attention.agentsAffected} agent{attention.agentsAffected === 1 ? '' : 's'} affected
+                  {attention.openDispatches ? ` · ${attention.openDispatches} open, no EOD` : ''}
+                  {attention.overpaymentToday ? ` · ${kes(attention.overpaymentToday)} overpayment swept` : ''}
+                </Text>
+              </>
+            )}
+          </Card>
 
           {/* Route performance */}
           <View style={styles.sectionHead}>
             <Text style={styles.section}>Route Performance</Text>
             <Pressable onPress={() => navigation.navigate('Route')}>
-              <Text style={styles.viewAll}>All {summary.data?.routes.length ?? 0} →</Text>
+              <Text style={styles.viewAll}>All {routes.length} →</Text>
             </Pressable>
           </View>
           <Text style={styles.sectionSub}>Collected vs dispatched · worst first</Text>
@@ -113,13 +171,58 @@ export default function AdminDashboard({ navigation }: Props) {
             ))
           )}
 
+          {/* 7-day trend */}
+          {trend.length > 0 && (
+            <>
+              <View style={styles.sectionHead}>
+                <Text style={styles.section}>Trend</Text>
+                <Pressable onPress={() => navigation.navigate('ReportView', { kind: 'summary', title: 'Period Summary' })}>
+                  <Text style={styles.viewAll}>7 days →</Text>
+                </Pressable>
+              </View>
+              <Card>
+                <TrendChart rows={trend} />
+                <View style={styles.legend}>
+                  <Legend color={colors.secondary} label="Dispatched" />
+                  <Legend color={colors.success} label="Collected" />
+                </View>
+              </Card>
+            </>
+          )}
+
+          {/* M-Pesa by till */}
+          {tills.length > 0 && (
+            <>
+              <View style={styles.sectionHead}>
+                <Text style={styles.section}>M-Pesa by Till</Text>
+                <Pressable onPress={() => navigation.navigate('ReportView', { kind: 'mpesa_recon', title: 'M-Pesa Reconciliation' })}>
+                  <Text style={styles.viewAll}>Recon →</Text>
+                </Pressable>
+              </View>
+              <Card>
+                {tills.map((t, i) => {
+                  const max = tills[0]?.amount || 1;
+                  return (
+                    <View key={`${t.name}-${i}`} style={styles.tillRow}>
+                      <Text style={styles.tillName} numberOfLines={1}>{t.name}</Text>
+                      <View style={{ flex: 1 }}>
+                        <ProgressBar progress={t.amount / max} height={6} fillColor={colors.tertiaryContainer} />
+                      </View>
+                      <Text style={styles.tillAmt}>{kes(t.amount, false)}</Text>
+                    </View>
+                  );
+                })}
+              </Card>
+            </>
+          )}
+
           {/* Status breakdown */}
           {counts && (
             <Card style={styles.statusCard}>
-              {(['pending', 'active', 'completed', 'cancelled'] as const).map((k, i) => (
-                <View key={k} style={[styles.statusItem, i > 0 && styles.statusBorder]}>
-                  <Text style={styles.statusCount}>{counts[k] ?? 0}</Text>
-                  <Text style={styles.statusLabel}>{k[0].toUpperCase() + k.slice(1)}</Text>
+              {(['pending', 'active', 'completed', 'cancelled'] as const).map((s, i) => (
+                <View key={s} style={[styles.statusItem, i > 0 && styles.statusBorder]}>
+                  <Text style={styles.statusCount}>{counts[s] ?? 0}</Text>
+                  <Text style={styles.statusLabel}>{s[0].toUpperCase() + s.slice(1)}</Text>
                 </View>
               ))}
             </Card>
@@ -140,13 +243,56 @@ export default function AdminDashboard({ navigation }: Props) {
   );
 }
 
-function Kpi({ icon, label, value, tone }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; label: string; value: string; tone?: string }) {
+function Kpi({
+  icon, label, period, value, tone, delta,
+}: {
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  label: string;
+  period?: string;
+  value: string;
+  tone?: string;
+  delta?: number | null;
+}) {
+  const d = delta == null ? null : Number(delta);
   return (
     <Card style={styles.kpi}>
-      <MaterialCommunityIcons name={icon} size={22} color={tone ?? colors.onSurface} />
+      <MaterialCommunityIcons name={icon} size={20} color={tone ?? colors.onSurface} />
       <Text style={styles.kpiLabel}>{label}</Text>
+      {period ? <Text style={styles.kpiPeriod}>{period}</Text> : null}
       <Text style={[styles.kpiValue, tone ? { color: tone } : null]}>{value}</Text>
+      {d != null && Number.isFinite(d) ? (
+        <Text style={[styles.kpiDelta, { color: d < 0 ? colors.error : colors.success }]}>
+          {d > 0 ? '+' : ''}{d.toFixed(1)}% vs yesterday
+        </Text>
+      ) : null}
     </Card>
+  );
+}
+
+function TrendChart({ rows }: { rows: { label: string; dispatched: number; collected: number }[] }) {
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.dispatched, r.collected)));
+  return (
+    <View style={styles.chart}>
+      {rows.slice(-7).map((r, i) => (
+        <View key={`${r.label}-${i}`} style={styles.chartCol}>
+          <View style={styles.chartBars}>
+            <View style={[styles.bar, { height: Math.max(2, (r.dispatched / max) * 90), backgroundColor: colors.secondary }]} />
+            <View style={[styles.bar, { height: Math.max(2, (r.collected / max) * 90), backgroundColor: colors.success }]} />
+          </View>
+          <Text style={styles.chartLabel}>{r.label}</Text>
+          <Text style={styles.chartValue}>{kesShort(r.collected)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function Legend({ color, label }: { color: string; label: string }) {
+  return (
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={styles.legendText}>{label}</Text>
+    </View>
   );
 }
 
@@ -162,9 +308,11 @@ const styles = StyleSheet.create({
   heroSub: { ...type.bodyLg, color: colors.inverseOnSurface, opacity: 0.9, marginTop: spacing.xs },
 
   kpiRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
-  kpi: { flex: 1, gap: spacing.xs },
+  kpi: { flex: 1, gap: 2 },
   kpiLabel: { ...type.labelSm, color: colors.onSurfaceVariant, marginTop: spacing.sm },
-  kpiValue: { ...type.metricXl, fontSize: 24, color: colors.onSurface },
+  kpiPeriod: { ...type.labelSm, fontSize: 9, color: colors.outline },
+  kpiValue: { ...type.metricXl, fontSize: 22, color: colors.onSurface, marginTop: 2 },
+  kpiDelta: { ...type.bodySm, fontSize: 11 },
 
   note: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: spacing.md, fontStyle: 'italic' },
 
@@ -172,12 +320,36 @@ const styles = StyleSheet.create({
   section: { ...type.headlineLg, color: colors.onSurface },
   sectionSub: { ...type.bodySm, color: colors.onSurfaceVariant, marginBottom: spacing.md },
   viewAll: { ...type.titleMd, color: colors.primary },
+  badgeCount: { ...type.labelSm, color: colors.onSurfaceVariant, backgroundColor: colors.surfaceContainerHigh, paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.full },
+
+  attentionCard: { marginTop: spacing.md, gap: spacing.sm },
+  attentionOk: { ...type.bodyLg, color: colors.onSurfaceVariant },
+  attentionTotal: { ...type.titleMd, fontFamily: fonts.sansBold, color: colors.error },
+  attentionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs },
+  attentionName: { ...type.titleMd, fontSize: 15, color: colors.onSurface },
+  attentionMeta: { ...type.bodySm, color: colors.onSurfaceVariant },
+  attentionAmt: { ...type.labelSm, fontSize: 14, fontFamily: fonts.monoSemibold, color: colors.error },
 
   routeCard: { marginBottom: spacing.sm, gap: spacing.sm },
   routeTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   routeName: { ...type.titleMd, color: colors.onSurface, flex: 1, marginRight: spacing.sm },
   routePct: { ...type.titleMd, fontFamily: fonts.monoSemibold },
   routeFig: { ...type.labelSm, color: colors.onSurfaceVariant },
+
+  chart: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 130, marginTop: spacing.sm },
+  chartCol: { flex: 1, alignItems: 'center', gap: 2 },
+  chartBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 92 },
+  bar: { width: 8, borderTopLeftRadius: 3, borderTopRightRadius: 3 },
+  chartLabel: { ...type.labelSm, fontSize: 10, color: colors.onSurfaceVariant },
+  chartValue: { ...type.labelSm, fontSize: 9, fontFamily: fonts.monoMedium, color: colors.outline },
+  legend: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { ...type.labelSm, color: colors.onSurfaceVariant },
+
+  tillRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xs },
+  tillName: { ...type.bodySm, color: colors.onSurface, width: 110 },
+  tillAmt: { ...type.labelSm, fontSize: 12, fontFamily: fonts.monoSemibold, color: colors.onSurface, width: 70, textAlign: 'right' },
 
   statusCard: { flexDirection: 'row', marginTop: spacing.lg, paddingVertical: spacing.md },
   statusItem: { flex: 1, alignItems: 'center' },

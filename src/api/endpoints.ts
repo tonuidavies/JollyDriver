@@ -21,6 +21,16 @@ import {
   StkPushResult,
   StkStatus,
   DispatchStatus,
+  ExpenseCategory,
+  DispatchExpense,
+  CommissionRate,
+  Customer,
+  Invoice,
+  InvoiceStatus,
+  PaymentMethod,
+  DashboardSummaryPayload,
+  NeedsAttentionPayload,
+  ReportsPeriodSummary,
 } from './types';
 
 // ---------- Auth ----------
@@ -158,8 +168,8 @@ export const recordSale = (input: {
 
 // ---------- Customers ----------
 export const searchCustomers = (term?: string) =>
-  apiRequest<any>('/api/v1/customers/search', { query: { term } });
-export const getCustomer = (id: number) => apiRequest<any>(`/api/v1/customers/get/${id}`);
+  apiRequest<Customer[]>('/api/v1/customers/search', { query: { term } });
+export const getCustomer = (id: number) => apiRequest<Customer>(`/api/v1/customers/get/${id}`);
 export const createCustomer = (input: {
   name: string;
   customer_type?: 'school' | 'other';
@@ -173,20 +183,16 @@ export const createCustomer = (input: {
 }) => apiRequest<any>('/api/v1/customers/create', { method: 'POST', body: input });
 
 // ---------- Invoices (LPO / AR) ----------
-export const listInvoices = (status?: string) =>
-  apiRequest<any>('/api/v1/invoices/list', { query: { status } });
-export const uninvoicedSales = (params: { customer_id: number; from?: string; to?: string }) =>
-  apiRequest<any>('/api/v1/invoices/uninvoiced', { query: params });
-export const createInvoice = (input: {
+// Every LPO sale is invoiced automatically when the sale is recorded — there is
+// no "create invoice" call. Payments post against the CUSTOMER's account and are
+// auto-allocated to their oldest outstanding invoices first.
+export const listInvoices = (status?: InvoiceStatus | string) =>
+  apiRequest<Invoice[]>('/api/v1/invoices/list', { query: { status } });
+
+export const recordAccountPayment = (input: {
   customer_id: number;
-  dispatch_sale_ids: number[];
-  lpo_number?: string;
-  period_from?: string;
-  period_to?: string;
-}) => apiRequest<any>('/api/v1/invoices/create', { method: 'POST', body: input });
-export const recordInvoicePayment = (input: {
-  invoice_id: number;
   amount: number;
+  payment_method: PaymentMethod;
   paid_on?: string;
   reference?: string;
 }) => apiRequest<any>('/api/v1/invoices/record_payment', { method: 'POST', body: input });
@@ -213,12 +219,16 @@ export const monthlySalesByVehicle = (params: { month?: string; status?: string 
   apiRequest<any>('/api/v1/reports/monthly_sales_by_vehicle', { query: params });
 export const vehicleMonthDetail = (params: { vehicle_id: number; month?: string; status?: string }) =>
   apiRequest<any>('/api/v1/reports/vehicle_month_detail', { query: params });
+export const commissionReport = (params: { from?: string; to?: string; agent_id?: number } = {}) =>
+  apiRequest<any>('/api/v1/reports/commission', { query: params });
+export const cashflowReport = (params: { from?: string; to?: string } = {}) =>
+  apiRequest<any>('/api/v1/reports/cashflow', { query: params });
 export const reportsSummary = (period: '7d' | '30d' | '90d' = '7d') =>
-  apiRequest<any>('/api/v1/reports/summary', { query: { period } });
+  apiRequest<ReportsPeriodSummary>('/api/v1/reports/summary', { query: { period } });
 export const dashboardSummaryApi = (date?: string) =>
-  apiRequest<any>('/api/v1/reports/dashboard_summary', { query: { date } });
+  apiRequest<DashboardSummaryPayload>('/api/v1/reports/dashboard_summary', { query: { date } });
 export const needsAttention = (date?: string) =>
-  apiRequest<any>('/api/v1/reports/needs_attention', { query: { date } });
+  apiRequest<NeedsAttentionPayload>('/api/v1/reports/needs_attention', { query: { date } });
 
 // ---------- CRUD: agents & vehicles ----------
 type AgentStatus = 'active' | 'suspended' | 'on_leave';
@@ -236,3 +246,59 @@ export const updateVehicle = (input: { id: number; registration_number: string; 
   apiRequest<any>('/api/v1/vehicles/update', { method: 'POST', body: input });
 export const deleteVehicle = (id: number) =>
   apiRequest<any>('/api/v1/vehicles/delete', { method: 'POST', body: { id } });
+
+// ---------- School (direct-to-school) dispatch ----------
+/**
+ * One call creates the dispatch, records its lines, posts the LPO sale and
+ * generates the invoice. Always ends up `completed` — there is no route and no
+ * in-transit leg, so nothing to change_status afterwards.
+ * `lpo_document` (a photo/scan) is multipart-only and isn't sent from the app yet.
+ */
+export const createSchoolDispatch = (input: {
+  vehicle_id: number;
+  driver_id: number; // user id
+  agent_id: number; // user id
+  customer_id: number; // the school
+  lpo_number: string;
+  dispatch_date?: string;
+  items: { product_id: number; quantity: number; price: number }[];
+}) => apiRequest<any>('/api/v1/dispatch/create_school', { method: 'POST', body: input });
+
+// ---------- Dispatch expenses ----------
+export const listExpenseCategories = () =>
+  apiRequest<ExpenseCategory[]>('/api/v1/expense_categories/list');
+
+export const listDispatchExpenses = (dispatch_id: number) =>
+  apiRequest<DispatchExpense[]>('/api/v1/dispatch/expenses', { query: { dispatch_id } });
+
+/** Always saved `pending`; never reduces net_expected until it's approved. */
+export const recordExpense = (input: {
+  dispatch_id: number;
+  expense_category_id: number;
+  amount: number;
+  description?: string;
+}) => apiRequest<any>('/api/v1/dispatch/record_expense', { method: 'POST', body: input });
+
+export const approveExpense = (expense_id: number) =>
+  apiRequest<any>('/api/v1/dispatch/approve_expense', { method: 'POST', body: { expense_id } });
+
+export const rejectExpense = (expense_id: number, reason?: string) =>
+  apiRequest<any>('/api/v1/dispatch/reject_expense', { method: 'POST', body: { expense_id, reason } });
+
+// ---------- Collection corrections ----------
+/** Only a manually-recorded CASH collection can be voided. Posts a reversal. */
+export const voidCollection = (entry_id: number, reason?: string) =>
+  apiRequest<any>('/api/v1/dispatch/void_collection', { method: 'POST', body: { entry_id, reason } });
+
+/** Voids the original and re-posts the corrected amount, both linked for audit. */
+export const editCollection = (input: { entry_id: number; amount: number; reason?: string }) =>
+  apiRequest<any>('/api/v1/dispatch/edit_collection', { method: 'POST', body: input });
+
+// ---------- Commissions ----------
+/** Read-only: the rates that actually apply to the signed-in agent. Empty is normal. */
+export const myCommissionRates = () =>
+  apiRequest<CommissionRate[]>('/api/v1/commissions/my_rates');
+
+// ---------- Per-entity reports ----------
+export const agentReport = (params: { id: number; from?: string; to?: string }) =>
+  apiRequest<any>('/api/v1/agents/report', { query: params });

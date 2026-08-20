@@ -3,7 +3,7 @@ import { View, Text, TextInput, Pressable, StyleSheet, Alert } from 'react-nativ
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { Screen, Card, StatusBadge, PrimaryButton, ScreenTitleBar, Select } from '../../components';
+import { Screen, Card, StatusBadge, PrimaryButton, ScreenTitleBar, Select, PaymentList } from '../../components';
 import { Loading, ErrorState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
@@ -48,6 +48,8 @@ const isEditableEntry = (p: DispatchPayment) =>
   String(p.collection_method ?? '').toLowerCase() === 'cash';
 
 const entryId = (p: DispatchPayment) => num(p.id);
+/** Guard against posting a correction/void against entry 0. */
+const hasEntryId = (p: DispatchPayment) => entryId(p) > 0;
 
 export default function DispatchDetail({ route, navigation }: Props) {
   const { id } = route.params;
@@ -366,8 +368,9 @@ export default function DispatchDetail({ route, navigation }: Props) {
       },
     ]);
 
-  const onVoid = (e: DispatchPayment) =>
-    Alert.alert('Void collection', `Reverse ${kes(num(e.amount))}? A reversal is posted — the original row is kept.`, [
+  const onVoid = (e: DispatchPayment) => {
+    if (!hasEntryId(e)) return Alert.alert("Can't void this entry", 'It has no ledger id to reverse.');
+    return Alert.alert('Void collection', `Reverse ${kes(num(e.amount))}? A reversal is posted — the original row is kept.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Void',
@@ -382,12 +385,14 @@ export default function DispatchDetail({ route, navigation }: Props) {
           ),
       },
     ]);
+  };
 
   const saveCorrection = () => {
     if (!editing) return;
     const amt = num(editValue);
     if (amt <= 0) return Alert.alert('Enter the corrected amount');
     const eid = entryId(editing);
+    if (eid <= 0) return Alert.alert("Can't correct this entry", 'It has no ledger id to re-post against.');
     editCollection.mutate(
       { entry_id: eid, amount: amt, reason: 'Corrected from mobile' },
       {
@@ -573,84 +578,40 @@ export default function DispatchDetail({ route, navigation }: Props) {
       )}
 
       {/* Payments ledger: field collections + KCB/M-Pesa IPNs matched by route+date */}
-      {payments.length > 0 && (
-        <>
-          <View style={styles.sectionHead}>
-            <Text style={styles.section}>Payments ({paymentsTotal?.count ?? payments.length})</Text>
-            <Text style={styles.paymentsTotal}>{kes(num(paymentsTotal?.amount))}</Text>
-          </View>
-          {paymentsTotal && (
-            <Text style={styles.paymentsSplit}>
-              Cash {kes(num(paymentsTotal.cash), false)}  ·  M-Pesa {kes(num(paymentsTotal.mpesa), false)}
-              {'  ·  voided entries excluded'}
-            </Text>
-          )}
-          {payments.map((p, i) => {
-            const editable = isEditableEntry(p) && (isDriver || isAdmin) && canAct;
-            const voided = !!p.voided_on;
-            const auto = String(p.source ?? '').toLowerCase() === 'automatic';
-            const method = String(p.collection_method ?? '').toLowerCase();
-            return (
-              <Card key={`${entryId(p)}-${i}`} style={styles.paymentRow}>
-                <View style={[styles.payIcon, voided && { backgroundColor: colors.errorContainer }]}>
-                  <MaterialCommunityIcons
-                    name={voided ? 'close-thick' : method === 'cash' ? 'cash' : 'cellphone-check'}
-                    size={18}
-                    color={voided ? colors.error : method === 'cash' ? colors.primary : colors.tertiary}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.itemName, voided && styles.voided]}>{kes(num(p.amount))}</Text>
-                  <Text style={styles.itemSub} numberOfLines={1}>
-                    {p.customer_name || p.customer_msisdn || (method === 'cash' ? 'Cash collection' : 'M-Pesa')}
-                  </Text>
-                  <Text style={styles.payMeta} numberOfLines={1}>
-                    {[
-                      p.mpesa_receipt_number || p.transaction_id,
-                      auto ? 'auto · route match' : 'manual',
-                      p.created_on,
-                    ]
-                      .filter(Boolean)
-                      .join('  ·  ')}
-                  </Text>
-                  {voided && <Text style={styles.voidNote}>Voided {p.voided_on}{p.void_reason ? ` — ${p.void_reason}` : ''}</Text>}
-                </View>
-                {editable && (
-                  <View style={styles.rowActions}>
-                    <IconAction
-                      icon="pencil-outline"
-                      tone={colors.secondary}
-                      onPress={() => { setEditing(p); setEditValue(String(num(p.amount))); }}
-                    />
-                    <IconAction icon="close-circle-outline" tone={colors.error} onPress={() => onVoid(p)} />
-                  </View>
-                )}
-              </Card>
-            );
-          })}
-          <Text style={styles.hintNote}>
-            Automatic KCB/M-Pesa confirmations are matched to this dispatch by route and date, so they carry no
-            dispatch id of their own — and only manual cash entries can be voided or corrected.
-          </Text>
+      <View style={{ marginTop: spacing.xl }}>
+        <PaymentList
+          payments={payments}
+          totals={paymentsTotal}
+          title="Payments"
+          exportName={`${data.order_number}-payments`}
+          emptyLabel={
+            String(data.dispatch_type ?? '') === 'school'
+              ? 'A school dispatch settles through its invoice, not this ledger.'
+              : 'Nothing collected against this dispatch yet.'
+          }
+          canEdit={(p) => isEditableEntry(p) && hasEntryId(p) && (isDriver || isAdmin) && canAct}
+          onCorrect={(p) => { setEditing(p); setEditValue(String(num(p.amount))); }}
+          onVoid={onVoid}
+        />
 
-          {editing && (
-            <Card style={styles.sheet}>
-              <Text style={styles.sheetTitle}>Correct amount</Text>
-              <Text style={styles.hintNote}>
-                Recorded {kes(num(editing.amount))}. The original is voided and the corrected amount re-posted.
-              </Text>
-              <View style={[styles.field, { marginTop: spacing.md }]}>
-                <Text style={styles.kesPrefix}>KES</Text>
-                <TextInput style={styles.moneyInput} keyboardType="numeric" value={editValue} onChangeText={setEditValue} placeholder="0" placeholderTextColor={colors.outline} />
-              </View>
-              <View style={styles.adminActions}>
-                <PrimaryButton label="Save Correction" icon="save-outline" iconRight={false} style={{ flex: 1 }} onPress={saveCorrection} disabled={editCollection.isPending} />
-                <PrimaryButton label="Cancel" variant="secondary" style={{ flex: 1 }} onPress={() => { setEditing(null); setEditValue(''); }} />
-              </View>
-            </Card>
-          )}
-        </>
-      )}
+        {editing && (
+          <Card style={styles.sheet}>
+            <Text style={styles.sheetTitle}>Correct amount</Text>
+            <Text style={styles.hintNote}>
+              Recorded {kes(num(editing.amount))}. The original is voided and the corrected amount re-posted, both
+              linked for audit.
+            </Text>
+            <View style={[styles.field, { marginTop: spacing.md }]}>
+              <Text style={styles.kesPrefix}>KES</Text>
+              <TextInput style={styles.moneyInput} keyboardType="numeric" value={editValue} onChangeText={setEditValue} placeholder="0" placeholderTextColor={colors.outline} />
+            </View>
+            <View style={styles.adminActions}>
+              <PrimaryButton label="Save Correction" icon="save-outline" iconRight={false} style={{ flex: 1 }} onPress={saveCorrection} disabled={editCollection.isPending} />
+              <PrimaryButton label="Cancel" variant="secondary" style={{ flex: 1 }} onPress={() => { setEditing(null); setEditValue(''); }} />
+            </View>
+          </Card>
+        )}
+      </View>
 
       {/* Expenses */}
       {expenseRows.length > 0 && (
@@ -813,13 +774,6 @@ const styles = StyleSheet.create({
 
   itemRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
   expenseRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
-  paymentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
-  payIcon: { width: 36, height: 36, borderRadius: radius.md, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center' },
-  payMeta: { ...type.labelSm, fontSize: 10, color: colors.outline, marginTop: 2 },
-  voided: { textDecorationLine: 'line-through', color: colors.onSurfaceVariant },
-  voidNote: { ...type.labelSm, fontSize: 10, color: colors.error, marginTop: 2 },
-  paymentsTotal: { ...type.titleMd, fontFamily: fonts.monoSemibold, color: colors.primary },
-  paymentsSplit: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: -spacing.sm, marginBottom: spacing.md },
   rowActions: { flexDirection: 'row', gap: spacing.xs, marginLeft: spacing.sm },
   iconAction: { padding: spacing.xs },
   itemIcon: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },

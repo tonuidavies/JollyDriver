@@ -12,5 +12,7 @@ export { default as Select } from './Select';
 export { default as FormModal } from './FormModal';
 export { default as Field } from './Field';
 export { default as RangeChips } from './RangeChips';
+export { default as PaymentList } from './PaymentList';
+export { default as FleetMap } from './FleetMap';
 export type { BadgeTone } from './StatusBadge';
 export type { Option } from './Select';

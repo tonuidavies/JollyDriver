@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { Card, ScreenTitleBar, ProgressBar } from '../../components';
+import { Card, ScreenTitleBar, ProgressBar, PaymentList } from '../../components';
 import DispatchCard from '../../components/DispatchCard';
 import { Loading, ErrorState, EmptyState } from '../../components/StateView';
 import { colors, type, spacing, radius } from '../../theme';
@@ -92,50 +92,20 @@ export default function RouteRecon({ route, navigation }: Props) {
             payments below.
           </Text>
 
-          <View style={styles.sectionHead}>
-            <Text style={styles.section}>Payments (last 30 days)</Text>
-            <Text style={styles.ledgerTotal}>{kes(ledgerTotal)}</Text>
+          <View style={{ marginTop: spacing.xl }}>
+            {payments.isLoading ? (
+              <Loading label="Loading payments…" />
+            ) : payments.isError ? (
+              <Text style={styles.note}>Payment ledger unavailable.</Text>
+            ) : (
+              <PaymentList
+                payments={ledger}
+                title="Payments · last 30 days"
+                exportName={`${routeName ?? 'route'}-payments`}
+                emptyLabel="No payments on this route in the last 30 days."
+              />
+            )}
           </View>
-          {payments.isLoading ? (
-            <Loading />
-          ) : payments.isError ? (
-            <Text style={styles.note}>Payment ledger unavailable.</Text>
-          ) : ledger.length === 0 ? (
-            <EmptyState icon="card-outline" message="No payments on this route yet." />
-          ) : (
-            <>
-              {ledger.slice(0, 25).map((p, i) => {
-                const voided = !!p.voided_on;
-                const method = String(p.collection_method ?? '').toLowerCase();
-                const auto = String(p.source ?? '').toLowerCase() === 'automatic';
-                return (
-                  <Card key={`${p.id}-${i}`} style={styles.payRow}>
-                    <View style={[styles.payIcon, voided && { backgroundColor: colors.errorContainer }]}>
-                      <Ionicons
-                        name={voided ? 'close' : method === 'cash' ? 'cash-outline' : 'phone-portrait-outline'}
-                        size={16}
-                        color={voided ? colors.error : method === 'cash' ? colors.primary : colors.tertiary}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.payName, voided && styles.voided]} numberOfLines={1}>
-                        {p.customer_name || p.customer_msisdn || (method === 'cash' ? 'Cash collection' : 'M-Pesa')}
-                      </Text>
-                      <Text style={styles.payMeta} numberOfLines={1}>
-                        {[p.mpesa_receipt_number || p.transaction_id, auto ? 'auto' : 'manual', p.created_on]
-                          .filter(Boolean)
-                          .join('  ·  ')}
-                      </Text>
-                    </View>
-                    <Text style={[styles.payAmt, voided && styles.voided]}>{kes(num(p.amount), false)}</Text>
-                  </Card>
-                );
-              })}
-              {ledger.length > 25 && (
-                <Text style={styles.note}>Showing the 25 most recent of {ledger.length} payments.</Text>
-              )}
-            </>
-          )}
 
           <Text style={styles.section}>Dispatches on this route (today)</Text>
           {dispatches.isLoading ? (

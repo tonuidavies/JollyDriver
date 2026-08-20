@@ -31,6 +31,7 @@ const FLEET_MODULES: Item[] = [
   { label: 'New Dispatch', icon: 'plus-box-outline', route: 'CreateDispatch' },
   { label: 'School Dispatch', icon: 'school-outline', route: 'SchoolDispatch' },
   { label: 'Vehicles', icon: 'truck', route: 'Vehicles' },
+  { label: 'Live Positions', icon: 'map-marker-radius-outline', route: 'LivePositions' },
   { label: 'Agents', icon: 'account-tie-outline', route: 'Agents' },
   { label: 'Schools & Customers', icon: 'store-outline', route: 'Customers' },
 ];

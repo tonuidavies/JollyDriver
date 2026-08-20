@@ -48,15 +48,23 @@ Variance, Overpaid, approved Expenses); Items with returned quantities; four act
   (`initiate_stk_push` + live status polling) for the customer to pay a balance.
 - **Record Returns** — unsold quantities per product.
 - **Record Expense** — parking/fuel/tyre etc. against this dispatch's cash-in-hand,
-  from `expense_categories/list`. Always saved *pending*; admins approve or reject
-  in-screen, and only approved ones reduce net expected.
+  from `expense_categories/list`. Approved on the spot, so it counts into net
+  expected right away (approve/reject stay available for anything still pending).
 
-Manual **cash** collections posted from the app can be voided or corrected
-(`void_collection` / `edit_collection`); automatic KCB/M-Pesa confirmations can't,
-and the UI won't offer it for them.
+**Payments ledger** — `dispatch/detail` returns `payments[]` and `payments_total`,
+so the screen lists every entry: manual field collections *and* automated KCB/M-Pesa
+IPNs matched to the dispatch by route + date (those carry `dispatch_id: null`).
+Voided rows are struck through and excluded from the totals. Only a manual **cash**
+entry offers void / correct (`void_collection` / `edit_collection`) — exactly what
+the API accepts.
 
-**Report** — per-dispatch reconciliation sheet: items (dispatched/returned/net),
-reconciled totals, expenses with approved total, signature lines.
+A top-up load creates a second line for a product already on the dispatch, so the
+returns and sale sheets merge lines **per product** before sending — one entry per
+`product_id`, never one per line.
+
+**Report** — per-dispatch sheet: items (dispatched/returned/net), reconciliation
+including LPO, expenses, collected and commission, the full payments table with
+cash/M-Pesa split, and signature lines.
 
 **Admin dashboard** — the same figures as the web dashboard, from
 `reports/dashboard_summary` + `needs_attention` + `route_performance` +
@@ -66,6 +74,12 @@ only knowable at EOD), Needs-attention, route performance worst-first, a 7-day
 dispatched-vs-collected trend, and M-Pesa by till. Every block degrades on its own
 and the KPIs fall back to a client-side route rollup.
 
+**Route reconciliation** — dispatched vs collected plus the itemised route ledger
+from `routes/payments` (last 30 days, cash/M-Pesa split).
+
+**Live Positions** — read-only `tracking/vehicles` feed: last-known fix, freshness,
+Redis-vs-DB source, and a tap-through to the map app.
+
 **Management** — dispatch register + New Dispatch, **New School Dispatch**
 (direct-to-school: no route, delivered/invoiced/completed in one call, with
 quick-add school), vehicles, agents, schools & customers, invoices (payments post
@@ -73,6 +87,10 @@ against the *customer account* and auto-allocate oldest-first), **Shortages**
 (short vs overpaid over a range, filterable by vehicle), **Commissions** (an
 agent's applicable rates + the earned-commission report), and the **Reports** hub
 mirroring the web catalogue with period chips.
+
+On both create forms driver and agent are **optional** — left empty, the server uses
+the vehicle's current driver and the route's current agent — and a route dispatch is
+created **active** unless you flip it to draft.
 
 **Side menu** — slide-in drawer grouped Fleet / Finance like the web sidebar.
 
@@ -102,8 +120,8 @@ src/
 │   ├── LoginScreen, ForgotPassword
 │   ├── driver/    # Dashboard, My Dispatches, Collections, Profile
 │   ├── admin/     # Dashboard, Reconciliation, Monthly, Team, RouteRecon, Dispatches,
-│   │              #   CreateDispatch, SchoolDispatch, Vehicles, Agents, Customers,
-│   │              #   CustomerDetail, Invoices, Shortages, Reports, ReportView
+│   │              #   CreateDispatch, SchoolDispatch, Vehicles, LivePositions, Agents,
+│   │              #   Customers, CustomerDetail, Invoices, Shortages, Reports, ReportView
 │   └── shared/    # DispatchDetail, DispatchReportView, Commissions
 └── theme/
 ```
@@ -125,11 +143,9 @@ src/
   `rowsOf`/`str` helpers in the report screens for where to tighten.
 - **LPO document upload** (`create_school` `lpo_document`) is multipart-only; the
   app posts JSON, so the scan is attached on the web for now.
-- **Collection corrections need an `entry_id`.** `dispatch/detail` doesn't return a
-  collections array, so the app can only offer void/edit for entries it posted
-  itself (it keeps the id from `record_collection`). If detail starts returning
-  `collections[]`, the list fills in automatically.
+- **Route assignments** have no endpoint, so New Dispatch prefills the crew from
+  the route's most recent dispatch (within the last 50 records) instead.
 - **Web-only modules** with no `/api/v1` equivalent yet: Routes/Products/Drivers
-  CRUD, Route Assignments, Sync Tracker Devices, PayBills & payment channels, SMS.
+  CRUD, Route Assignments, tracker device management, PayBills & payment channels, SMS.
 
 _The app icon/splash in `assets/` are placeholders — swap in final brand art._

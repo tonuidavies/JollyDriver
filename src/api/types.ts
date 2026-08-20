@@ -153,29 +153,51 @@ export type DispatchSale = {
   items?: DispatchItem[];
 };
 
+/**
+ * A row from `dispatch/detail.payments[]` — manual field collections recorded
+ * against this dispatch AND automated KCB/M-Pesa IPNs matched by route+date.
+ * An automated IPN has no dispatch of its own, so `dispatch_id` is null there.
+ */
 export type DispatchPayment = {
-  id?: number;
-  time?: string;
+  id: number | string;
+  dispatch_id: number | string | null;
+  amount: number | string;
+  transaction_id?: string | null;
+  mpesa_receipt_number?: string | null;
+  narration?: string | null;
+  customer_name?: string | null;
+  customer_msisdn?: string | null;
+  /** 'manual' = recorded in the field, 'automatic' = KCB/M-Pesa IPN */
+  source?: 'manual' | 'automatic' | string;
+  collection_method?: 'cash' | 'mpesa' | string;
+  voided_on?: string | null;
+  void_reason?: string | null;
   created_on?: string;
-  source?: string; // "KCB/MPESA" | "MANUAL" | ...
-  method?: string;
-  amount?: number;
-  customer?: string;
-  customer_name?: string;
-  transaction_id?: string;
-  mpesa_receipt?: string;
-  receipt_number?: string;
+};
+
+/** payments_total — across payments[], excluding voided entries. */
+export type PaymentsTotal = {
+  count: number;
+  amount: number;
+  cash: number;
+  mpesa: number;
 };
 
 /** Reconciliation numbers shown on the dispatch detail. Field names are mapped defensively. */
 export type DispatchDetail = DispatchOrder & {
   items: DispatchItem[];
   sales?: DispatchSale[];
+  /** Itemised ledger for this dispatch. Empty for a School Dispatch (no route) —
+   *  those settle through invoices instead. */
   payments?: DispatchPayment[];
-  /** posted collections, when the server version exposes them */
-  collections?: CollectionEntry[];
-  ledger_entries?: CollectionEntry[];
+  payments_total?: PaymentsTotal;
   expenses?: DispatchExpense[];
+  /** 'route' | 'school' */
+  dispatch_type?: string;
+  customer?: { id: number; name: string } | null;
+  lpo_value?: number;
+  expenses_value?: number;
+  total_commission?: number;
   // reconciliation (any of these may be present depending on server version)
   sold?: number;
   unaccounted?: number;

@@ -23,6 +23,8 @@ export type RootStackParamList = {
   Shortages: undefined;
   /** Agent commission rates + the earned-commission report */
   Commissions: undefined;
+  /** Read-only GPS feed for tracked vehicles */
+  LivePositions: undefined;
   Reports: undefined;
   ReportView: { kind: string; title: string };
 };

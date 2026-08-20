@@ -31,6 +31,7 @@ import {
   DashboardSummaryPayload,
   NeedsAttentionPayload,
   ReportsPeriodSummary,
+  DispatchPayment,
 } from './types';
 
 // ---------- Auth ----------
@@ -132,6 +133,22 @@ export const dispatchReport = (params: { from?: string; to?: string } = {}) =>
 export const routeReport = (params: { id: number; from?: string; to?: string }) =>
   apiRequest<RouteReport>('/api/v1/routes/report', { query: params });
 
+/**
+ * Every payment recorded against a route — manual field collections and
+ * automated KCB/M-Pesa IPNs share this ledger. Defaults to the last 30 days.
+ */
+export const routePayments = (params: {
+  route_id: number;
+  from?: string;
+  to?: string;
+  page?: number;
+  per_page?: number;
+}) => apiRequest<DispatchPayment[]>('/api/v1/routes/payments', { query: params });
+
+/** Last-known GPS position per tracked vehicle (read-only; written by a cron). */
+export const trackingVehicles = (vehicle_id?: number) =>
+  apiRequest<any>('/api/v1/tracking/vehicles', { query: { vehicle_id } });
+
 export const driverReport = (params: { id: number; from?: string; to?: string }) =>
   apiRequest<DriverReport>('/api/v1/drivers/report', { query: params });
 
@@ -139,11 +156,17 @@ export const vehicleReport = (params: { id: number; from?: string; to?: string }
   apiRequest<VehicleReport>('/api/v1/vehicles/report', { query: params });
 
 // ---------- Dispatch: field sales & lifecycle ----------
+/**
+ * driver_id / agent_id are optional USER ids — the server falls back to the
+ * vehicle's current driver and the route's current agent when they're omitted
+ * or no longer valid, the same auto-fill the web form does.
+ * `activate` defaults to true server-side; pass false to keep it a draft.
+ */
 export const createDispatch = (input: {
   vehicle_id: number;
   route_id: number;
-  driver_id: number; // user id
-  agent_id: number; // user id
+  driver_id?: number;
+  agent_id?: number;
   items: { product_id: number; quantity: number; price: number }[];
   activate?: boolean;
 }) => apiRequest<any>('/api/v1/dispatch/create', { method: 'POST', body: input });
@@ -256,8 +279,9 @@ export const deleteVehicle = (id: number) =>
  */
 export const createSchoolDispatch = (input: {
   vehicle_id: number;
-  driver_id: number; // user id
-  agent_id: number; // user id
+  /** optional user ids — default to the vehicle's current driver/agent */
+  driver_id?: number;
+  agent_id?: number;
   customer_id: number; // the school
   lpo_number: string;
   dispatch_date?: string;
@@ -271,7 +295,7 @@ export const listExpenseCategories = () =>
 export const listDispatchExpenses = (dispatch_id: number) =>
   apiRequest<DispatchExpense[]>('/api/v1/dispatch/expenses', { query: { dispatch_id } });
 
-/** Always saved `pending`; never reduces net_expected until it's approved. */
+/** Approved on the spot — it counts into net_expected right away. */
 export const recordExpense = (input: {
   dispatch_id: number;
   expense_category_id: number;

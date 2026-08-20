@@ -14,7 +14,7 @@ import {
   useCustomerSearch,
 } from '../../api/hooks';
 import {
-  DispatchStatus, DispatchItem, Reconciliation, RemainingStockItem, DispatchExpense, CollectionEntry,
+  DispatchStatus, DispatchItem, Reconciliation, RemainingStockItem, DispatchExpense, DispatchPayment,
 } from '../../api/types';
 import { useAuth } from '../../context/AuthContext';
 import { RootStackParamList } from '../../navigation/types';
@@ -42,14 +42,12 @@ const EXPENSE_TONE: Record<string, 'success' | 'pending' | 'error' | 'neutral'> 
 };
 
 /** Only a manually-recorded CASH collection can be voided or corrected. */
-const isEditableEntry = (e: CollectionEntry) => {
-  const m = String(e.method ?? '').toLowerCase();
-  const src = String(e.source ?? '').toLowerCase();
-  const voided = String(e.status ?? '').toLowerCase().includes('void');
-  return !voided && m === 'cash' && !src.includes('kcb') && !src.includes('mpesa');
-};
+const isEditableEntry = (p: DispatchPayment) =>
+  !p.voided_on &&
+  String(p.source ?? '').toLowerCase() === 'manual' &&
+  String(p.collection_method ?? '').toLowerCase() === 'cash';
 
-const entryId = (e: CollectionEntry) => num(e.entry_id ?? e.id);
+const entryId = (p: DispatchPayment) => num(p.id);
 
 export default function DispatchDetail({ route, navigation }: Props) {
   const { id } = route.params;
@@ -77,10 +75,7 @@ export default function DispatchDetail({ route, navigation }: Props) {
   const [notes, setNotes] = useState('');
   const [stkRef, setStkRef] = useState<{ invoice_number?: string; checkout_request_id?: string } | null>(null);
   const stk = useStkStatus(stkRef);
-  /** Collections posted from this screen — kept so cash entries stay correctable
-   *  even when dispatch/detail doesn't return a collections array. */
-  const [posted, setPosted] = useState<CollectionEntry[]>([]);
-  const [editing, setEditing] = useState<CollectionEntry | null>(null);
+  const [editing, setEditing] = useState<DispatchPayment | null>(null);
   const [editValue, setEditValue] = useState('');
 
   // sale / returns quantities keyed by product_id
@@ -162,26 +157,30 @@ export default function DispatchDetail({ route, navigation }: Props) {
     .filter((e) => String(e.status).toLowerCase() === 'approved')
     .reduce((s, e) => s + num(e.amount), 0);
 
-  const collections: CollectionEntry[] = useMemo(() => {
-    const raw = (data as any)?.collections ?? (data as any)?.ledger_entries;
-    const fromDetail: CollectionEntry[] = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
-    const seen = new Set(fromDetail.map((e) => entryId(e)).filter(Boolean));
-    return [...fromDetail, ...posted.filter((p) => !seen.has(entryId(p)))];
-  }, [data, posted]);
+  /** The dispatch's own ledger: field collections + KCB/M-Pesa IPNs matched by route+date. */
+  const payments: DispatchPayment[] = useMemo(() => arr(data?.payments), [data]);
+  const paymentsTotal = data?.payments_total;
 
   const reconCells = useMemo(() => {
     if (!data) return [];
     const dispatched = num(data.total_amount);
-    const r = lastRecon;
+    const r = lastRecon; // the fuller breakdown a collection/returns call returns
+    const collected = r ? r.collected : num(data.payments_total?.amount);
+    const netExpected = r ? r.net_expected : num(data.net_expected ?? dispatched);
+    const lpo = r ? r.lpo_value : num(data.lpo_value);
+    const expenses = r ? approvedExpenseTotal : num(data.expenses_value ?? approvedExpenseTotal);
+
     const cells: { label: string; value: number; tone?: string }[] = [
       { label: 'Dispatched', value: dispatched },
     ];
     if (r) cells.push({ label: 'Sold', value: r.sales_total });
     cells.push({ label: 'Returns', value: r ? r.returns_value : num(data.returns_value) });
-    if (r && r.lpo_value) cells.push({ label: 'LPO / Credit', value: r.lpo_value });
-    cells.push({ label: 'Net Expected', value: r ? r.net_expected : num(data.net_expected ?? dispatched) });
+    if (lpo > 0) cells.push({ label: 'LPO / Credit', value: lpo });
+    if (expenses > 0) cells.push({ label: 'Expenses', value: expenses });
+    cells.push({ label: 'Net Expected', value: netExpected });
+    cells.push({ label: 'Collected', value: collected, tone: colors.primary });
+
     if (r) {
-      cells.push({ label: 'Collected', value: r.collected, tone: colors.primary });
       cells.push({ label: 'Unaccounted', value: r.unaccounted_value });
       cells.push({ label: 'Variance', value: r.variance, tone: r.variance < 0 ? colors.error : colors.success });
       if (r.overpayment_value > 0) cells.push({ label: 'Overpaid', value: r.overpayment_value });
@@ -189,7 +188,7 @@ export default function DispatchDetail({ route, navigation }: Props) {
       const short = num(data.shortage_amount);
       cells.push({ label: 'Shortage', value: short, tone: short > 0 ? colors.error : colors.success });
     }
-    if (approvedExpenseTotal > 0) cells.push({ label: 'Expenses', value: approvedExpenseTotal });
+    if (num(data.total_commission) > 0) cells.push({ label: 'Commission', value: num(data.total_commission) });
     return cells;
   }, [data, lastRecon, approvedExpenseTotal]);
 
@@ -240,13 +239,6 @@ export default function DispatchDetail({ route, navigation }: Props) {
         { dispatch_id: id, amount: amt, method, phone_number: phone || undefined, notes: notes || undefined },
         {
           onSuccess: (r) => {
-            const eid = num((r as any).entry_id ?? (r as any).id);
-            if (eid) {
-              setPosted((p) => [
-                ...p,
-                { entry_id: eid, amount: amt, method, source: 'MANUAL', transaction_id: r.transaction_id, notes, created_on: new Date().toISOString() },
-              ]);
-            }
             setAmount(''); setNotes(''); setPhone('');
             if (r.reconciliation) setLastRecon(r.reconciliation);
             Alert.alert('Collection recorded', `${r.transaction_id}\nBalance after: ${kes(r.balance_after)}`);
@@ -339,7 +331,7 @@ export default function DispatchDetail({ route, navigation }: Props) {
       {
         onSuccess: () => {
           setExpenseAmount(''); setExpenseDesc(''); setExpenseCategory(null); setSheet(null);
-          Alert.alert('Expense recorded', 'Saved as pending — it only affects net expected once an admin approves it.');
+          Alert.alert('Expense recorded', 'Approved on the spot — it already counts against what this dispatch owes.');
           expenses.refetch();
         },
         onError: (e) => Alert.alert('Failed', (e as Error).message),
@@ -374,7 +366,7 @@ export default function DispatchDetail({ route, navigation }: Props) {
       },
     ]);
 
-  const onVoid = (e: CollectionEntry) =>
+  const onVoid = (e: DispatchPayment) =>
     Alert.alert('Void collection', `Reverse ${kes(num(e.amount))}? A reversal is posted — the original row is kept.`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -384,7 +376,7 @@ export default function DispatchDetail({ route, navigation }: Props) {
           voidCollection.mutate(
             { entryId: entryId(e), reason: 'Voided from mobile' },
             {
-              onSuccess: () => { setPosted((p) => p.filter((x) => entryId(x) !== entryId(e))); refetch(); Alert.alert('Voided'); },
+              onSuccess: () => { refetch(); Alert.alert('Voided'); },
               onError: (err) => Alert.alert('Failed', (err as Error).message),
             }
           ),
@@ -400,7 +392,6 @@ export default function DispatchDetail({ route, navigation }: Props) {
       { entry_id: eid, amount: amt, reason: 'Corrected from mobile' },
       {
         onSuccess: () => {
-          setPosted((p) => p.map((x) => (entryId(x) === eid ? { ...x, amount: amt } : x)));
           setEditing(null); setEditValue('');
           refetch();
           Alert.alert('Corrected', 'The original was voided and the new amount posted, both linked for audit.');
@@ -577,38 +568,70 @@ export default function DispatchDetail({ route, navigation }: Props) {
           <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>Description (optional)</Text>
           <TextInput style={styles.notes} multiline value={expenseDesc} onChangeText={setExpenseDesc} placeholder="e.g. parking at Bomet stage" placeholderTextColor={colors.outline} />
           <PrimaryButton label="Record Expense" icon="save-outline" iconRight={false} style={{ marginTop: spacing.lg }} onPress={submitExpense} disabled={busy} />
-          <Text style={styles.hintNote}>Paid out of this dispatch's cash-in-hand. Saved pending — an admin has to approve it.</Text>
+          <Text style={styles.hintNote}>Paid out of this dispatch's cash-in-hand. Counts into net expected straight away.</Text>
         </Card>
       )}
 
-      {/* Collections posted (manual cash can be voided / corrected) */}
-      {collections.length > 0 && (
+      {/* Payments ledger: field collections + KCB/M-Pesa IPNs matched by route+date */}
+      {payments.length > 0 && (
         <>
-          <Text style={styles.section}>Collections ({collections.length})</Text>
-          {collections.map((e, i) => {
-            const editable = isEditableEntry(e) && (isDriver || isAdmin) && canAct;
+          <View style={styles.sectionHead}>
+            <Text style={styles.section}>Payments ({paymentsTotal?.count ?? payments.length})</Text>
+            <Text style={styles.paymentsTotal}>{kes(num(paymentsTotal?.amount))}</Text>
+          </View>
+          {paymentsTotal && (
+            <Text style={styles.paymentsSplit}>
+              Cash {kes(num(paymentsTotal.cash), false)}  ·  M-Pesa {kes(num(paymentsTotal.mpesa), false)}
+              {'  ·  voided entries excluded'}
+            </Text>
+          )}
+          {payments.map((p, i) => {
+            const editable = isEditableEntry(p) && (isDriver || isAdmin) && canAct;
+            const voided = !!p.voided_on;
+            const auto = String(p.source ?? '').toLowerCase() === 'automatic';
+            const method = String(p.collection_method ?? '').toLowerCase();
             return (
-              <Card key={`${entryId(e)}-${i}`} style={styles.expenseRow}>
+              <Card key={`${entryId(p)}-${i}`} style={styles.paymentRow}>
+                <View style={[styles.payIcon, voided && { backgroundColor: colors.errorContainer }]}>
+                  <MaterialCommunityIcons
+                    name={voided ? 'close-thick' : method === 'cash' ? 'cash' : 'cellphone-check'}
+                    size={18}
+                    color={voided ? colors.error : method === 'cash' ? colors.primary : colors.tertiary}
+                  />
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>{kes(num(e.amount))}</Text>
-                  <Text style={styles.itemSub}>
-                    {String(e.method ?? e.source ?? 'cash').replace('_', ' ')}
-                    {e.transaction_id ? ` · ${e.transaction_id}` : ''}
+                  <Text style={[styles.itemName, voided && styles.voided]}>{kes(num(p.amount))}</Text>
+                  <Text style={styles.itemSub} numberOfLines={1}>
+                    {p.customer_name || p.customer_msisdn || (method === 'cash' ? 'Cash collection' : 'M-Pesa')}
                   </Text>
+                  <Text style={styles.payMeta} numberOfLines={1}>
+                    {[
+                      p.mpesa_receipt_number || p.transaction_id,
+                      auto ? 'auto · route match' : 'manual',
+                      p.created_on,
+                    ]
+                      .filter(Boolean)
+                      .join('  ·  ')}
+                  </Text>
+                  {voided && <Text style={styles.voidNote}>Voided {p.voided_on}{p.void_reason ? ` — ${p.void_reason}` : ''}</Text>}
                 </View>
                 {editable && (
                   <View style={styles.rowActions}>
                     <IconAction
                       icon="pencil-outline"
                       tone={colors.secondary}
-                      onPress={() => { setEditing(e); setEditValue(String(num(e.amount))); }}
+                      onPress={() => { setEditing(p); setEditValue(String(num(p.amount))); }}
                     />
-                    <IconAction icon="close-circle-outline" tone={colors.error} onPress={() => onVoid(e)} />
+                    <IconAction icon="close-circle-outline" tone={colors.error} onPress={() => onVoid(p)} />
                   </View>
                 )}
               </Card>
             );
           })}
+          <Text style={styles.hintNote}>
+            Automatic KCB/M-Pesa confirmations are matched to this dispatch by route and date, so they carry no
+            dispatch id of their own — and only manual cash entries can be voided or corrected.
+          </Text>
 
           {editing && (
             <Card style={styles.sheet}>
@@ -790,6 +813,13 @@ const styles = StyleSheet.create({
 
   itemRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
   expenseRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
+  paymentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.sm },
+  payIcon: { width: 36, height: 36, borderRadius: radius.md, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center' },
+  payMeta: { ...type.labelSm, fontSize: 10, color: colors.outline, marginTop: 2 },
+  voided: { textDecorationLine: 'line-through', color: colors.onSurfaceVariant },
+  voidNote: { ...type.labelSm, fontSize: 10, color: colors.error, marginTop: 2 },
+  paymentsTotal: { ...type.titleMd, fontFamily: fonts.monoSemibold, color: colors.primary },
+  paymentsSplit: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: -spacing.sm, marginBottom: spacing.md },
   rowActions: { flexDirection: 'row', gap: spacing.xs, marginLeft: spacing.sm },
   iconAction: { padding: spacing.xs },
   itemIcon: { width: 40, height: 40, borderRadius: radius.md, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },

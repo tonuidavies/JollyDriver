@@ -6,9 +6,8 @@ import { Screen, Card, ScreenTitleBar, StatusBadge } from '../../components';
 import { Loading, ErrorState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
-import { useDispatchDetail, useDispatchExpenses, useMpesaRecon } from '../../api/hooks';
-import { mpesaForDispatch } from '../../api/mpesa';
-import { DispatchExpense } from '../../api/types';
+import { useDispatchDetail, useDispatchExpenses } from '../../api/hooks';
+import { DispatchExpense, DispatchPayment } from '../../api/types';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DispatchReport'>;
@@ -29,14 +28,13 @@ export default function DispatchReportView({ route, navigation }: Props) {
     [expenseRows]
   );
 
-  // No per-dispatch payments endpoint exists, so pull the day's M-Pesa/KCB
-  // reconciliation and pick out this dispatch's rows.
-  const day = data?.dispatch_date;
-  const mpesa = useMpesaRecon({ from: day, to: day, limit: 0 }, !!day);
-  const txns = useMemo(
-    () => mpesaForDispatch(mpesa.data, { id, order_number: data?.order_number, route: data?.route }),
-    [mpesa.data, id, data?.order_number, data?.route]
-  );
+  /** dispatch/detail carries the ledger itself: field collections + matched KCB/M-Pesa IPNs. */
+  const payments: DispatchPayment[] = useMemo(() => {
+    const raw = (data?.payments ?? []) as any;
+    return Array.isArray(raw) ? raw : raw?.data ?? [];
+  }, [data]);
+  const paymentsTotal = data?.payments_total;
+  const livePayments = payments.filter((p) => !p.voided_on);
 
   const totals = useMemo(() => {
     const items = data?.items ?? [];
@@ -44,8 +42,12 @@ export default function DispatchReportView({ route, navigation }: Props) {
     const returns = num(data?.returns_value);
     const netExpected = num(data?.net_expected ?? dispatched);
     const shortage = num(data?.shortage_amount);
+    const collected = num(data?.payments_total?.amount);
+    const lpo = num(data?.lpo_value);
+    const expenses = num(data?.expenses_value);
+    const commission = num(data?.total_commission);
     const netUnits = items.reduce((s, it) => s + (num(it.quantity) - num(it.returned_quantity)), 0);
-    return { dispatched, returns, netExpected, shortage, netUnits };
+    return { dispatched, returns, netExpected, shortage, collected, lpo, expenses, commission, netUnits };
   }, [data]);
 
   if (isLoading) return <Screen><Loading label="Loading report…" /></Screen>;
@@ -80,8 +82,12 @@ export default function DispatchReportView({ route, navigation }: Props) {
       <View style={styles.reconGrid}>
         <ReconCell label="Dispatched" value={kes(totals.dispatched)} />
         <ReconCell label="Returns" value={kes(totals.returns)} />
+        {totals.lpo > 0 && <ReconCell label="LPO / Credit" value={kes(totals.lpo)} />}
+        {totals.expenses > 0 && <ReconCell label="Expenses" value={kes(totals.expenses)} />}
         <ReconCell label="Net Expected" value={kes(totals.netExpected)} tone={colors.primary} />
+        <ReconCell label="Collected" value={kes(totals.collected)} tone={colors.success} />
         <ReconCell label="Shortage" value={kes(totals.shortage)} tone={totals.shortage > 0 ? colors.error : colors.success} />
+        {totals.commission > 0 && <ReconCell label="Commission" value={kes(totals.commission)} />}
       </View>
 
       {/* Items table */}
@@ -140,16 +146,14 @@ export default function DispatchReportView({ route, navigation }: Props) {
         </>
       )}
 
-      {/* M-Pesa / KCB transactions */}
-      <Text style={styles.section}>M-Pesa Transactions</Text>
-      {mpesa.isLoading ? (
-        <Card><Text style={styles.metaLabel}>Loading transactions…</Text></Card>
-      ) : txns.rows.length === 0 ? (
+      {/* Payments: field collections + KCB/M-Pesa IPNs matched by route + date */}
+      <Text style={styles.section}>Payments</Text>
+      {payments.length === 0 ? (
         <Card>
           <Text style={styles.metaLabel}>
-            {mpesa.isError
-              ? 'Transaction feed unavailable.'
-              : 'No M-Pesa or KCB transactions matched to this dispatch.'}
+            {String(data.dispatch_type ?? '') === 'school'
+              ? 'A school dispatch settles through its invoice, not this ledger.'
+              : 'No payments recorded against this dispatch.'}
           </Text>
         </Card>
       ) : (
@@ -160,40 +164,52 @@ export default function DispatchReportView({ route, navigation }: Props) {
               <Text style={[styles.cell, styles.thText, { flex: 2 }]}>Payer</Text>
               <Text style={[styles.cell, styles.thText, styles.right, { flex: 1.6 }]}>Amount</Text>
             </View>
-            {txns.rows.map((t, i) => (
-              <View key={`${t.receipt}-${i}`} style={styles.tr}>
-                <View style={{ flex: 2.4 }}>
-                  <Text style={[styles.cell, styles.mono, { paddingHorizontal: 0 }]} numberOfLines={1}>{t.receipt}</Text>
-                  {!!t.time && <Text style={styles.txnMeta} numberOfLines={1}>{t.time}</Text>}
+            {payments.map((p, i) => {
+              const voided = !!p.voided_on;
+              const auto = String(p.source ?? '').toLowerCase() === 'automatic';
+              const method = String(p.collection_method ?? '').toLowerCase();
+              return (
+                <View key={`${p.id}-${i}`} style={styles.tr}>
+                  <View style={{ flex: 2.4 }}>
+                    <Text style={[styles.cell, styles.mono, { paddingHorizontal: 0 }, voided && styles.voided]} numberOfLines={1}>
+                      {p.mpesa_receipt_number || p.transaction_id || '—'}
+                    </Text>
+                    {!!p.created_on && <Text style={styles.txnMeta} numberOfLines={1}>{p.created_on}</Text>}
+                  </View>
+                  <View style={{ flex: 2 }}>
+                    <Text style={[styles.cell, { paddingHorizontal: 0 }]} numberOfLines={1}>
+                      {p.customer_name || p.customer_msisdn || (method === 'cash' ? 'Cash' : 'M-Pesa')}
+                    </Text>
+                    <Text style={styles.txnMeta} numberOfLines={1}>
+                      {method || 'cash'} · {auto ? 'auto' : 'manual'}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1.6, alignItems: 'flex-end' }}>
+                    <Text style={[styles.cell, styles.mono, { paddingHorizontal: 0 }, voided && styles.voided]}>
+                      {kes(num(p.amount), false)}
+                    </Text>
+                    {voided && <Text style={[styles.txnMeta, { color: colors.error }]}>voided</Text>}
+                  </View>
                 </View>
-                <View style={{ flex: 2 }}>
-                  <Text style={[styles.cell, { paddingHorizontal: 0 }]} numberOfLines={1}>{t.name || t.phone || '—'}</Text>
-                  {!!t.till && <Text style={styles.txnMeta} numberOfLines={1}>{t.till}</Text>}
-                </View>
-                <View style={{ flex: 1.6, alignItems: 'flex-end' }}>
-                  <Text style={[styles.cell, styles.mono, { paddingHorizontal: 0 }]}>{kes(t.amount, false)}</Text>
-                  <Text style={[styles.txnMeta, { color: t.matched ? colors.success : colors.error }]}>
-                    {t.matched ? 'matched' : 'unmatched'}
-                  </Text>
-                </View>
-              </View>
-            ))}
+              );
+            })}
             <View style={[styles.tr, styles.totalRow]}>
-              <Text style={[styles.cell, { flex: 3, fontFamily: fonts.sansBold }]}>Total received</Text>
-              <Text style={[styles.cell, styles.right, styles.mono, { flex: 3, color: colors.primary }]}>{kes(txns.total)}</Text>
+              <Text style={[styles.cell, { flex: 3, fontFamily: fonts.sansBold }]}>
+                Total received ({paymentsTotal?.count ?? livePayments.length})
+              </Text>
+              <Text style={[styles.cell, styles.right, styles.mono, { flex: 3, color: colors.primary }]}>
+                {kes(num(paymentsTotal?.amount ?? livePayments.reduce((s, p) => s + num(p.amount), 0)))}
+              </Text>
             </View>
           </Card>
-          <Text style={styles.note}>
-            {txns.scope === 'dispatch'
-              ? 'Matched to this dispatch by the reconciliation feed.'
-              : `Same-day payments on the ${data.route?.name ?? 'route'} till — the feed didn't tag them to a dispatch, so treat them as route-level.`}
-          </Text>
+          {paymentsTotal && (
+            <Text style={styles.note}>
+              Cash {kes(num(paymentsTotal.cash))} · M-Pesa {kes(num(paymentsTotal.mpesa))} — voided entries excluded.
+              Automatic KCB/M-Pesa confirmations are matched to this dispatch by route and date.
+            </Text>
+          )}
         </>
       )}
-
-      <Text style={styles.note}>
-        Cash and manual entries aren't in this list — they show in the reconciled totals above.
-      </Text>
 
       <View style={styles.sign}>
         <View style={styles.signBlock}><View style={styles.signLine} /><Text style={styles.signLabel}>Reconciled by (Agent)</Text></View>
@@ -232,6 +248,7 @@ const styles = StyleSheet.create({
   reconValue: { ...type.metricXl, fontSize: 20, color: colors.onSurface, marginTop: spacing.xs },
 
   txnMeta: { ...type.labelSm, fontSize: 10, color: colors.onSurfaceVariant },
+  voided: { textDecorationLine: 'line-through', color: colors.onSurfaceVariant },
   tr: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.outlineVariant },
   th: { backgroundColor: colors.surfaceContainerHigh, borderTopWidth: 0 },
   thText: { ...type.labelSm, color: colors.onSurfaceVariant },

@@ -90,8 +90,8 @@ export default function SchoolDispatchScreen({ navigation }: Props) {
   };
 
   const submit = () => {
-    if (!vehicleId || !driverId || !agentId || !customerId) {
-      return Alert.alert('Missing fields', 'Select vehicle, driver, agent and the school.');
+    if (!vehicleId || !customerId) {
+      return Alert.alert('Missing fields', 'Select a vehicle and the school.');
     }
     if (!lpoNumber.trim()) return Alert.alert('LPO number required');
     const items = lines
@@ -102,8 +102,9 @@ export default function SchoolDispatchScreen({ navigation }: Props) {
     create.mutate(
       {
         vehicle_id: vehicleId,
-        driver_id: driverId,
-        agent_id: agentId,
+        // optional — the server falls back to the vehicle's current driver/agent
+        driver_id: driverId ?? undefined,
+        agent_id: agentId ?? undefined,
         customer_id: customerId,
         lpo_number: lpoNumber.trim(),
         dispatch_date: date || undefined,
@@ -150,8 +151,8 @@ export default function SchoolDispatchScreen({ navigation }: Props) {
             <Text style={styles.section}>Vehicle & Crew</Text>
             <View style={{ gap: spacing.md }}>
               <Select label="Vehicle" value={vehicleId} options={vehicleOpts} onChange={(v) => setVehicleId(num(v))} placeholder="Select vehicle" />
-              <Select label="Driver" value={driverId} options={driverOpts} onChange={(v) => setDriverId(num(v))} placeholder="Select driver" />
-              <Select label="Agent" value={agentId} options={agentOpts} onChange={(v) => setAgentId(num(v))} placeholder="Select agent" />
+              <Select label="Driver (optional)" value={driverId} options={driverOpts} onChange={(v) => setDriverId(num(v))} placeholder="Auto — vehicle's current driver" />
+              <Select label="Agent (optional)" value={agentId} options={agentOpts} onChange={(v) => setAgentId(num(v))} placeholder="Auto — vehicle's current agent" />
             </View>
 
             <Text style={styles.section}>School & LPO</Text>

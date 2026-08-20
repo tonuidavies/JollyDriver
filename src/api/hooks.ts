@@ -89,6 +89,24 @@ export function useDriverReport(id: number | undefined, from = ymd(), to = ymd()
   });
 }
 
+/** Itemised route ledger — manual collections + automated KCB/M-Pesa IPNs. */
+export function useRoutePayments(routeId: number | undefined, p: { from?: string; to?: string } = {}) {
+  return useQuery({
+    queryKey: ['route', 'payments', routeId ?? -1, p],
+    queryFn: () => api.routePayments({ route_id: routeId as number, per_page: 100, ...p }),
+    enabled: typeof routeId === 'number' && routeId > 0,
+  });
+}
+
+/** Last-known GPS position per tracked vehicle. */
+export function useVehiclePositions(vehicleId?: number) {
+  return useQuery({
+    queryKey: ['tracking', 'vehicles', vehicleId ?? 'all'],
+    queryFn: () => api.trackingVehicles(vehicleId),
+    refetchInterval: 60_000,
+  });
+}
+
 // ---- Mutations ----
 export function useChangeStatus() {
   const client = useQueryClient();

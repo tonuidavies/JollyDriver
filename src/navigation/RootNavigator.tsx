@@ -27,6 +27,7 @@ import ReportView from '../screens/admin/ReportView';
 import SchoolDispatchScreen from '../screens/admin/SchoolDispatchScreen';
 import ShortagesScreen from '../screens/admin/ShortagesScreen';
 import CommissionsScreen from '../screens/shared/CommissionsScreen';
+import LivePositionsScreen from '../screens/admin/LivePositionsScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -71,6 +72,7 @@ export default function RootNavigator() {
             <Stack.Screen name="SchoolDispatch" component={SchoolDispatchScreen} />
             <Stack.Screen name="Shortages" component={ShortagesScreen} />
             <Stack.Screen name="Commissions" component={CommissionsScreen} />
+            <Stack.Screen name="LivePositions" component={LivePositionsScreen} />
             <Stack.Screen name="Customers" component={CustomersScreen} />
             <Stack.Screen name="CustomerDetail" component={CustomerDetail} />
             <Stack.Screen name="Invoices" component={InvoicesScreen} />

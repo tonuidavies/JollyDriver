@@ -30,7 +30,8 @@ export default function CreateDispatchScreen({ navigation }: Props) {
   const [vehicleId, setVehicleId] = useState<number | null>(null);
   const [driverId, setDriverId] = useState<number | null>(null);
   const [agentId, setAgentId] = useState<number | null>(null);
-  const [activate, setActivate] = useState(false);
+  // the API creates dispatches active by default now; off = keep it a draft
+  const [activate, setActivate] = useState(true);
   const [lines, setLines] = useState<Line[]>([{ key: 'l1', quantity: '', price: '' }]);
   const [prefilledFrom, setPrefilledFrom] = useState<string | null>(null);
 
@@ -87,13 +88,21 @@ export default function CreateDispatchScreen({ navigation }: Props) {
   const removeLine = (key: string) => setLines((ls) => (ls.length > 1 ? ls.filter((l) => l.key !== key) : ls));
 
   const submit = () => {
-    if (!routeId || !vehicleId || !driverId || !agentId) return Alert.alert('Missing fields', 'Select route, vehicle, driver and agent.');
+    if (!routeId || !vehicleId) return Alert.alert('Missing fields', 'Select a route and a vehicle.');
     const items = lines
       .filter((l) => l.product_id && num(l.quantity) > 0)
       .map((l) => ({ product_id: l.product_id as number, quantity: num(l.quantity), price: num(l.price) }));
     if (items.length === 0) return Alert.alert('Add items', 'Add at least one product line with a quantity.');
     create.mutate(
-      { vehicle_id: vehicleId, route_id: routeId, driver_id: driverId, agent_id: agentId, items, activate },
+      {
+        vehicle_id: vehicleId,
+        route_id: routeId,
+        // optional — the server falls back to the vehicle's driver / route's agent
+        driver_id: driverId ?? undefined,
+        agent_id: agentId ?? undefined,
+        items,
+        activate,
+      },
       {
         onSuccess: () => { Alert.alert('Dispatch created', activate ? 'Marked active.' : 'Saved as draft.'); navigation.goBack(); },
         onError: (e) => Alert.alert('Failed', (e as Error).message),
@@ -119,15 +128,16 @@ export default function CreateDispatchScreen({ navigation }: Props) {
           <View style={{ gap: spacing.md }}>
             <Select label="Route" value={routeId} options={routeOpts} onChange={(v) => setRouteId(num(v))} placeholder="Select route" />
             <Select label="Vehicle" value={vehicleId} options={vehicleOpts} onChange={(v) => setVehicleId(num(v))} placeholder="Select vehicle" />
-            <Select label="Driver" value={driverId} options={driverOpts} onChange={(v) => setDriverId(num(v))} placeholder="Select driver" />
-            <Select label="Agent" value={agentId} options={agentOpts} onChange={(v) => setAgentId(num(v))} placeholder="Select agent" />
+            <Select label="Driver (optional)" value={driverId} options={driverOpts} onChange={(v) => setDriverId(num(v))} placeholder="Auto — vehicle's current driver" />
+            <Select label="Agent (optional)" value={agentId} options={agentOpts} onChange={(v) => setAgentId(num(v))} placeholder="Auto — route's current agent" />
           </View>
 
           {prefilledFrom && (
             <View style={styles.prefillNote}>
               <Ionicons name="sparkles-outline" size={16} color={colors.secondary} />
               <Text style={styles.prefillText}>
-                Vehicle, driver and agent filled in from this route's last dispatch ({prefilledFrom}). Change any of them if today differs.
+                Vehicle, driver and agent filled in from this route's last dispatch ({prefilledFrom}). Change or clear them —
+                left empty, the server uses the vehicle's current driver and the route's current agent.
               </Text>
             </View>
           )}
@@ -169,7 +179,7 @@ export default function CreateDispatchScreen({ navigation }: Props) {
           <View style={styles.activateRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.activateLabel}>Activate immediately</Text>
-              <Text style={styles.activateSub}>Off = saved as draft (like the web form)</Text>
+              <Text style={styles.activateSub}>On by default. Off = saved as a draft.</Text>
             </View>
             <Switch value={activate} onValueChange={setActivate} trackColor={{ true: colors.primaryContainer, false: colors.outlineVariant }} thumbColor={colors.surfaceContainerLowest} />
           </View>

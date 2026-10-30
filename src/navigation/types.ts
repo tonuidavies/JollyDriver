@@ -1,3 +1,5 @@
+import type { Receipt } from '../utils/receipt';
+
 export type RootStackParamList = {
   Login: undefined;
   ForgotPassword: undefined;
@@ -7,6 +9,8 @@ export type RootStackParamList = {
   DispatchDetail: { id: number; orderNumber?: string };
   /** Per-dispatch reconciliation report (items + matched payments) */
   DispatchReport: { id: number; orderNumber?: string };
+  /** POS-style Invoice & Delivery slip; `fresh` = just recorded */
+  Receipt: { receipt: Receipt; fresh?: boolean };
   /** Route-level reconciliation (dispatched vs collected, shorts) */
   RouteRecon: { routeId: number; routeName?: string };
   // Management modules

@@ -70,7 +70,11 @@ function log(...args: unknown[]) {
 /** Raw token request (login OR refresh). Handles both flat and `{data:{...}}` envelopes. */
 export async function requestToken(body: Record<string, string>): Promise<TokenResponse> {
   const endpoint = url('/api/v1/oauth/token');
-  const safeBody = { ...body, password: body.password ? '***' : undefined };
+  const safeBody = {
+    ...body,
+    password: body.password ? '***' : undefined,
+    refresh_token: body.refresh_token ? '***' : undefined,
+  };
   log('POST', endpoint, safeBody);
 
   let res: Response;
@@ -91,7 +95,8 @@ export async function requestToken(body: Record<string, string>): Promise<TokenR
     );
   }
 
-  log('RESPONSE', res.status, raw.slice(0, 500));
+  // never print the tokens themselves, even in debug
+  log('RESPONSE', res.status, raw.slice(0, 500).replace(/("(?:access|refresh)_token"\s*:\s*")[^"]*/g, '$1***'));
 
   let json: any = {};
   try {

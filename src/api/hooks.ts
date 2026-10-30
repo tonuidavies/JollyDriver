@@ -287,8 +287,8 @@ export const useRoutePerformanceReport = (p: RangeQ = {}) =>
   useQuery({ queryKey: ['report', 'route_perf', p], queryFn: () => api.routePerformance(p) });
 export const useAgentPerformance = (p: RangeQ = {}) =>
   useQuery({ queryKey: ['report', 'agent_perf', p], queryFn: () => api.agentPerformance(p) });
-export const useLpoSales = (p: RangeQ = {}) =>
-  useQuery({ queryKey: ['report', 'lpo_sales', p], queryFn: () => api.lpoSales(p) });
+export const useLpoSales = (p: RangeQ = {}, enabled = true) =>
+  useQuery({ queryKey: ['report', 'lpo_sales', p], queryFn: () => api.lpoSales(p), enabled });
 export const useMonthlySalesByVehicle = (month?: string) =>
   useQuery({ queryKey: ['report', 'monthly_vehicle', month], queryFn: () => api.monthlySalesByVehicle({ month }) });
 export const useReportsSummary = (period: '7d' | '30d' | '90d' = '7d') =>

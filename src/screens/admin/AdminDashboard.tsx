@@ -97,7 +97,7 @@ export default function AdminDashboard({ navigation }: Props) {
               value={kes(k?.shortYesterday ?? 0, false)}
               tone={(k?.shortYesterday ?? 0) > 0 ? colors.error : colors.success}
             />
-            <Kpi icon="map-marker-path" label="Routes Active" period="TODAY" value={String(routes.length)} />
+            <Kpi icon="map-marker-path" label="Routes Active" period="TODAY" value={String(k?.vehiclesOnRoad ?? 0)} />
           </View>
 
           {dash.data?.degraded && (
@@ -109,21 +109,44 @@ export default function AdminDashboard({ navigation }: Props) {
           {/* Needs attention */}
           <View style={styles.sectionHead}>
             <Text style={styles.section}>Needs Attention</Text>
-            {attention ? <Text style={styles.badgeCount}>{attention.vehicles.length}</Text> : null}
+            {attention ? (
+              <Text style={styles.badgeCount}>
+                {attention.vehicles.length + (attention.openDispatches > 0 ? 1 : 0) + (attention.overdueInvoices > 0 ? 1 : 0)}
+              </Text>
+            ) : null}
           </View>
           <Card style={styles.attentionCard}>
             {!attention ? (
               <Text style={styles.attentionOk}>Attention feed unavailable.</Text>
             ) : attention.vehicles.length === 0 ? (
-              <>
+              attention.openDispatches === 0 && attention.overdueInvoices === 0 ? (
                 <Text style={styles.attentionOk}>Nothing needs attention right now.</Text>
-                {attention.openDispatches > 0 && (
-                  <Text style={styles.attentionMeta}>
-                    {attention.openDispatches} dispatch{attention.openDispatches === 1 ? '' : 'es'} still open, no EOD done yet
-                    {attention.oldestOpen ? ` (since ${attention.oldestOpen})` : ''}
-                  </Text>
-                )}
-              </>
+              ) : (
+                <>
+                  {attention.openDispatches > 0 && (
+                    <Pressable style={styles.attentionRow} onPress={() => navigation.navigate('Dispatches')}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.attentionName}>
+                          {attention.openDispatches} dispatch{attention.openDispatches === 1 ? '' : 'es'} still open
+                        </Text>
+                        <Text style={styles.attentionMeta}>
+                          No end-of-day yet{attention.oldestOpen ? ` · oldest since ${attention.oldestOpen}` : ''}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  )}
+                  {attention.overdueInvoices > 0 && (
+                    <Pressable style={styles.attentionRow} onPress={() => navigation.navigate('Invoices')}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.attentionName}>
+                          {attention.overdueInvoices} school invoice{attention.overdueInvoices === 1 ? '' : 's'} overdue
+                        </Text>
+                        <Text style={styles.attentionMeta}>{kes(attention.outstandingLpo)} owed on school/LPO accounts</Text>
+                      </View>
+                    </Pressable>
+                  )}
+                </>
+              )
             ) : (
               <>
                 <Text style={styles.attentionTotal}>{kes(attention.outstanding)} outstanding</Text>
@@ -162,10 +185,20 @@ export default function AdminDashboard({ navigation }: Props) {
                 <Card style={styles.routeCard}>
                   <View style={styles.routeTop}>
                     <Text style={styles.routeName} numberOfLines={1}>{r.name}</Text>
-                    <Text style={[styles.routePct, { color: r.pct < 0.5 ? colors.error : colors.primary }]}>{Math.round(r.pct * 100)}%</Text>
+                    {r.dispatched > 0 ? (
+                      <Text style={[styles.routePct, { color: r.pct < 0.5 ? colors.error : colors.primary }]}>{Math.round(r.pct * 100)}%</Text>
+                    ) : (
+                      <Text style={[styles.routePct, { color: colors.onSurfaceVariant, fontSize: 13 }]}>no trip today</Text>
+                    )}
                   </View>
-                  <ProgressBar progress={r.pct} height={8} fillColor={r.pct < 0.5 ? colors.error : colors.primaryContainer} />
-                  <Text style={styles.routeFig}>{kes(r.collected, false)} / {kes(r.dispatched, false)} KES</Text>
+                  {r.dispatched > 0 && (
+                    <ProgressBar progress={r.pct} height={8} fillColor={r.pct < 0.5 ? colors.error : colors.primaryContainer} />
+                  )}
+                  <Text style={styles.routeFig}>
+                    {r.dispatched > 0
+                      ? `${kes(r.collected, false)} of ${kes(r.dispatched, false)} KES collected`
+                      : `${kes(r.collected)} came in (till / M-Pesa)`}
+                  </Text>
                 </Card>
               </Pressable>
             ))

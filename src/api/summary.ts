@@ -8,6 +8,7 @@ import {
   mpesaRecon,
 } from './endpoints';
 import { ymd } from './dates';
+import { asTable, rowObjects, figure } from './tables';
 
 /** Run async fn over items with a concurrency cap (avoid 43 simultaneous requests). */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -41,6 +42,8 @@ export type DashboardSummary = {
     routesShort: number;
   };
   routes: RoutePerf[]; // worst collection % first
+  /** routes with at least one trip in the range */
+  routesActive?: number;
 };
 
 const num = (v: unknown): number => {
@@ -48,44 +51,45 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
-/** Pull the route array out of whatever envelope reports/route_performance uses. */
-function extractRows(res: any): any[] {
-  if (Array.isArray(res)) return res;
-  if (Array.isArray(res?.routes)) return res.routes;
-  if (Array.isArray(res?.data)) return res.data;
-  if (Array.isArray(res?.data?.routes)) return res.data.routes;
-  return [];
-}
-
-/** Map a route_performance row defensively (field names not in the spec yet). */
-function buildFromPerf(rows: any[]): DashboardSummary {
-  let collected = 0, dispatched = 0, netExpected = 0, returns = 0, shortages = 0, routesShort = 0;
-  const routes: RoutePerf[] = rows.map((r) => {
-    const id = num(r.route_id ?? r.id ?? 0);
-    const name = r.route_name ?? r.name ?? r.route ?? 'Route';
-    const c = num(r.collected ?? r.collected_total ?? 0);
-    const d = num(r.dispatched ?? r.dispatched_total ?? 0);
-    const ret = num(r.returns ?? r.returns_total ?? 0);
-    const ne = num(r.net_expected ?? r.net_expected_total ?? (d - ret || d));
-    const rawRate = r.rate ?? r.collection_rate ?? r.collected_rate;
-    let pct: number;
-    if (rawRate != null && rawRate !== '') {
-      const rr = num(rawRate);
-      pct = rr > 1 ? rr / 100 : rr; // tolerate 0..1 or 0..100
-    } else {
-      const base = ne || d;
-      pct = base > 0 ? c / base : 0;
-    }
-    const short = Math.max(0, (ne || d) - c);
-    collected += c; dispatched += d; netExpected += ne; returns += ret;
+/**
+ * reports/route_performance is a table — columns Route | Trips | Dispatched |
+ * Collected | Rate | Status, values pre-formatted ("KES 9,385", "0%"). It names
+ * routes but carries no id, so ids come from routes/list (one call).
+ */
+async function buildFromPerf(res: unknown): Promise<DashboardSummary | null> {
+  const table = asTable(res);
+  if (!table || table.rows.length === 0) return null;
+  const ids = new Map<string, number>();
+  try {
+    for (const r of await listRoutes()) ids.set(String(r.name).trim().toUpperCase(), num(r.id));
+  } catch {
+    /* rows still render; they just won't open the route screen */
+  }
+  let collected = 0, dispatched = 0, shortages = 0, routesShort = 0, routesActive = 0;
+  const routes: RoutePerf[] = rowObjects(table).map((r) => {
+    const name = r['Route'] || 'Route';
+    const c = figure(r['Collected']);
+    const d = figure(r['Dispatched']);
+    if (figure(r['Trips']) > 0) routesActive += 1;
+    const short = Math.max(0, d - c);
+    collected += c; dispatched += d;
     if (short > 0) routesShort += 1;
     shortages += short;
-    return { id, name, collected: c, dispatched: d, netExpected: ne, short, pct };
+    return {
+      id: ids.get(name.trim().toUpperCase()) ?? 0,
+      name, collected: c, dispatched: d, netExpected: d, short,
+      pct: r['Rate'] ? figure(r['Rate']) / 100 : d > 0 ? c / d : 0,
+    };
   });
-  routes.sort((a, b) => a.pct - b.pct || b.short - a.short);
+  // routes that ran a trip first (worst rate first), then the rest by money in
+  routes.sort((a, b) =>
+    Number(b.dispatched > 0) - Number(a.dispatched > 0) ||
+    (a.dispatched > 0 ? a.pct - b.pct || b.short - a.short : b.collected - a.collected)
+  );
   return {
-    totals: { collected, dispatched, returns, netExpected, netPosition: netExpected - collected, shortages, routesShort },
+    totals: { collected, dispatched, returns: 0, netExpected: dispatched, netPosition: dispatched - collected, shortages, routesShort },
     routes,
+    routesActive,
   };
 }
 
@@ -124,9 +128,8 @@ async function legacyAggregate(from?: string, to?: string): Promise<DashboardSum
  */
 export async function fetchDashboardSummary(from?: string, to?: string): Promise<DashboardSummary> {
   try {
-    const res = await routePerformance({ from, to });
-    const rows = extractRows(res);
-    if (rows.length > 0) return buildFromPerf(rows);
+    const built = await buildFromPerf(await routePerformance({ from, to }));
+    if (built) return built;
   } catch {
     /* fall through to legacy */
   }
@@ -165,6 +168,8 @@ export type AdminDashboard = {
     openDispatches: number;
     oldestOpen: string | null;
     overpaymentToday: number;
+    overdueInvoices: number;
+    outstandingLpo: number;
   } | null;
   routes: RoutePerf[];
   trend: { label: string; dispatched: number; collected: number }[];
@@ -183,6 +188,9 @@ function pick(obj: any, keys: string[]): unknown {
   return undefined;
 }
 const pickNum = (obj: any, keys: string[]): number => num(pick(obj, keys));
+/** today vs yesterday in %, one decimal — null when there's no yesterday to compare to. */
+const changePct = (today: number, yesterday: number): number | null =>
+  yesterday > 0 ? Math.round(((today - yesterday) / yesterday) * 1000) / 10 : null;
 const pickStr = (obj: any, keys: string[]): string => {
   const v = pick(obj, keys);
   return v == null ? '' : String(v);
@@ -219,14 +227,14 @@ function buildTrend(res: any): { label: string; dispatched: number; collected: n
     .filter((r) => r.label);
 }
 
+/** reports/mpesa_recon table — Date | Transaction ID | Route / Account | Amount | Status. */
 function buildMpesaByTill(res: any): { name: string; amount: number }[] {
-  const rows = firstArray(res, ['transactions', 'rows', 'matched', 'entries', 'by_till', 'tills']);
+  const table = asTable(res);
+  if (!table) return [];
   const totals = new Map<string, number>();
-  for (const r of rows) {
-    const name =
-      pickStr(r, ['till_name', 'till', 'account_name', 'account', 'route_name', 'route', 'short_code', 'shortcode']) ||
-      'Unattributed';
-    const amt = pickNum(r, ['amount', 'trans_amount', 'value', 'collected']);
+  for (const r of rowObjects(table)) {
+    const name = r['Route / Account'] || 'Unattributed';
+    const amt = figure(r['Amount']);
     if (!amt) continue;
     totals.set(name, (totals.get(name) ?? 0) + amt);
   }
@@ -236,12 +244,17 @@ function buildMpesaByTill(res: any): { name: string; amount: number }[] {
     .slice(0, 10);
 }
 
+/**
+ * reports/needs_attention: { shortage_total, shortage_count, shortage_rows[],
+ * open_no_eod_count, open_no_eod_oldest_date, overpayment_swept_today,
+ * overdue_invoices_count, total_outstanding_lpo }.
+ */
 function buildAttention(res: any): AdminDashboard['attention'] {
   const root = res?.data ?? res;
   if (!root || typeof root !== 'object') return null;
-  const rows = firstArray(root, ['vehicles', 'short_vehicles', 'rows']);
+  const rows: any[] = Array.isArray(root.shortage_rows) ? root.shortage_rows : firstArray(root, ['vehicles', 'short_vehicles', 'rows']);
   return {
-    outstanding: pickNum(root, ['outstanding', 'outstanding_value', 'total_shortage', 'shortage']),
+    outstanding: pickNum(root, ['shortage_total', 'outstanding', 'total_shortage', 'shortage']),
     vehicles: rows.map((v) => ({
       name: pickStr(v, ['registration_number', 'vehicle', 'vehicle_registration', 'name']) || '—',
       route: pickStr(v, ['route', 'route_name']) || '—',
@@ -249,9 +262,11 @@ function buildAttention(res: any): AdminDashboard['attention'] {
       shortage: pickNum(v, ['shortage', 'shortage_amount', 'short', 'amount']),
     })),
     agentsAffected: pickNum(root, ['agents_affected', 'agents']),
-    openDispatches: pickNum(root, ['open_dispatches', 'dispatches_open', 'open']),
-    oldestOpen: (pick(root, ['oldest_open_dispatch', 'oldest_open', 'oldest']) as string) ?? null,
-    overpaymentToday: pickNum(root, ['overpayment_today', 'overpayment', 'overpayment_value']),
+    openDispatches: pickNum(root, ['open_no_eod_count', 'open_dispatches']),
+    oldestOpen: (pick(root, ['open_no_eod_oldest_date', 'oldest_open_dispatch']) as string) ?? null,
+    overpaymentToday: pickNum(root, ['overpayment_swept_today', 'overpayment_today']),
+    overdueInvoices: pickNum(root, ['overdue_invoices_count']),
+    outstandingLpo: pickNum(root, ['total_outstanding_lpo']),
   };
 }
 
@@ -268,10 +283,7 @@ export async function fetchAdminDashboard(date = ymd()): Promise<AdminDashboard>
 
   // Route performance drives the "worst first" list and backs up the KPIs.
   let perf: DashboardSummary | null = null;
-  if (perfRes.status === 'fulfilled') {
-    const rows = extractRows(perfRes.value);
-    if (rows.length > 0) perf = buildFromPerf(rows);
-  }
+  if (perfRes.status === 'fulfilled') perf = await buildFromPerf(perfRes.value).catch(() => null);
   if (!perf) {
     try {
       perf = await fetchDashboardSummary(date, date);
@@ -287,20 +299,22 @@ export async function fetchAdminDashboard(date = ymd()): Promise<AdminDashboard>
     collectedToday: hasKpis ? pickNum(kpiRaw, ['collected_today', 'collected', 'collected_total']) : num(t?.collected),
     dispatchedToday: hasKpis ? pickNum(kpiRaw, ['dispatched_today', 'dispatched', 'dispatched_total']) : num(t?.dispatched),
     returnedYesterday: hasKpis
-      ? pickNum(kpiRaw, ['returned_yesterday', 'returned', 'returns', 'returns_value'])
+      ? pickNum(kpiRaw, ['returns_yesterday', 'returned_yesterday', 'returns'])
       : num(t?.returns),
     mpesaToday: hasKpis ? pickNum(kpiRaw, ['mpesa_today', 'mpesa', 'mpesa_total']) : 0,
     cashYesterday: hasKpis ? pickNum(kpiRaw, ['cash_yesterday', 'cash', 'cash_total']) : 0,
     shortYesterday: hasKpis
-      ? pickNum(kpiRaw, ['short_yesterday', 'short', 'shortage', 'shortage_value'])
+      ? pickNum(kpiRaw, ['shortage_yesterday', 'short_yesterday', 'shortage'])
       : num(t?.shortages),
-    vehiclesOnRoad: hasKpis ? pickNum(kpiRaw, ['vehicles_on_road', 'vehicles', 'vehicle_count']) : perf?.routes.length ?? 0,
+    // dashboard_summary has no vehicle count — routes that ran a trip today stand in
+    vehiclesOnRoad: pickNum(kpiRaw, ['vehicles_on_road']) || (perf?.routesActive ?? 0),
     vehiclesShort: hasKpis ? pickNum(kpiRaw, ['vehicles_short', 'short_vehicles']) : num(t?.routesShort),
+    // the web shows "% vs yesterday"; the API gives both days, so derive it the same way
     dispatchedChangePct: hasKpis
-      ? (pick(kpiRaw, ['dispatched_change_pct', 'dispatched_vs_yesterday', 'dispatched_change']) as number ?? null)
+      ? changePct(pickNum(kpiRaw, ['dispatched_today']), pickNum(kpiRaw, ['dispatched_yesterday']))
       : null,
     mpesaChangePct: hasKpis
-      ? (pick(kpiRaw, ['mpesa_change_pct', 'mpesa_vs_yesterday', 'mpesa_change']) as number ?? null)
+      ? changePct(pickNum(kpiRaw, ['mpesa_today']), pickNum(kpiRaw, ['mpesa_yesterday']))
       : null,
   };
 

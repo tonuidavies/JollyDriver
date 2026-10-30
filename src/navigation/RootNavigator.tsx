@@ -14,6 +14,7 @@ import DriverTabs from './DriverTabs';
 import AdminTabs from './AdminTabs';
 import DispatchDetail from '../screens/shared/DispatchDetail';
 import DispatchReportView from '../screens/shared/DispatchReportView';
+import ReceiptScreen from '../screens/shared/ReceiptScreen';
 import RouteRecon from '../screens/admin/RouteRecon';
 import VehiclesScreen from '../screens/admin/VehiclesScreen';
 import AgentsScreen from '../screens/admin/AgentsScreen';
@@ -64,6 +65,7 @@ export default function RootNavigator() {
             )}
             <Stack.Screen name="DispatchDetail" component={DispatchDetail} />
             <Stack.Screen name="DispatchReport" component={DispatchReportView} />
+            <Stack.Screen name="Receipt" component={ReceiptScreen} />
             <Stack.Screen name="RouteRecon" component={RouteRecon} />
             <Stack.Screen name="Vehicles" component={VehiclesScreen} />
             <Stack.Screen name="Agents" component={AgentsScreen} />

@@ -10,7 +10,8 @@
  */
 export const config = {
 	// ⬇️  CHANGE THIS to your reachable server.
-	baseUrl: 'https://api.jolly.kovacpay.com',
+	// EXPO_PUBLIC_API_URL overrides it for dev, e.g. the local relay in scripts/api-relay.mjs.
+	baseUrl: process.env.EXPO_PUBLIC_API_URL || 'https://api.jolly.kovacpay.com',
 
 	// Hardcoded per the API docs ("client_id should be hardcoded in your app").
 	clientId: 'jolly_mobile_app',
@@ -18,8 +19,16 @@ export const config = {
 	// Access tokens last 24h; we refresh silently a little early.
 	tokenRefreshSkewMs: 60 * 60 * 1000, // refresh if <1h left
 
-	// Set false to silence network/auth console logging in production.
-	debug: true,
+	// Network/auth console logging — on in dev, off in release builds.
+	debug: __DEV__,
+
+	// Printed at the top of every Invoice & Delivery slip — matches the shop POS.
+	company: {
+		name: 'JOLLY SUPER ENTERPRISES  LTD.',
+		address: 'P.O BOX 20, RORET',
+		pin: 'P051371653X',
+		phone: '0717740734',
+	},
 } as const;
 
 export default config;

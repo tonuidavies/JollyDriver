@@ -102,6 +102,25 @@ record_sale/record_returns/remaining_stock/STK/report), customers, invoices/LPO,
 all reports, and vehicle/agent CRUD. Types in `src/api/types.ts` are modeled
 from the real responses you provided.
 
+## Invoice & Delivery slips
+
+Every sale opens a slip laid out like the shop POS printout (company block,
+Invoice/Account/Page, Date/Time/Sales Person, Bill To, Item table, totals,
+Code 128 barcode) with **Print** and **Share PDF**. Past sales on a dispatch
+are listed under **Slips** and reprint the same way; an LPO sale is matched to
+its invoice by customer + amount. The header text lives in `config.company`.
+
+## Running behind a corporate proxy (dev)
+
+If the emulator can't reach the API (e.g. an HTTPS-inspecting proxy it doesn't
+trust), run the local relay and point the app at it:
+
+```bash
+HTTPS_PROXY=http://<your-proxy>:<port> node --use-system-ca scripts/api-relay.mjs
+adb reverse tcp:8787 tcp:8787 && adb reverse tcp:8081 tcp:8081
+EXPO_OFFLINE=1 EXPO_PUBLIC_API_URL=http://127.0.0.1:8787 npx expo start
+```
+
 ## Config knobs
 
 - `src/config.ts` — `baseUrl`, `clientId`, and `debug` (logs every request/response

@@ -10,6 +10,7 @@ import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
 import { rangeFor, currentMonth, RangePreset } from '../../api/dates';
 import * as api from '../../api/endpoints';
+import { asTable, ReportTable } from '../../api/tables';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReportView'>;
@@ -66,7 +67,12 @@ export default function ReportView({ route, navigation }: Props) {
   });
 
   // some endpoints return a bare array once the envelope is unwrapped
-  const payload: any = Array.isArray(data) ? { rows: data } : (data as any) ?? {};
+  const raw: any = Array.isArray(data) ? { rows: data } : (data as any) ?? {};
+  // most reports are the web's table format — render it as one, and show the rest generically
+  const table = asTable(raw);
+  const payload: any = table
+    ? Object.fromEntries(Object.entries(raw).filter(([k]) => !TABLE_KEYS.has(k)))
+    : raw;
   const scalars = Object.entries(payload).filter(([, v]) => v == null || typeof v !== 'object');
   const objects = Object.entries(payload).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v));
   const arrays = Object.entries(payload).filter(([, v]) => Array.isArray(v)) as [string, any[]][];
@@ -91,6 +97,8 @@ export default function ReportView({ route, navigation }: Props) {
 
       {isLoading ? <Loading label="Running report…" /> : isError ? <ErrorState message={(error as Error)?.message} onRetry={refetch} /> : (
         <>
+          {table && <TableReport table={table} chart={raw.chart} />}
+
           {/* top-level scalar KPIs */}
           {scalars.length > 0 && (
             <View style={styles.kpiGrid}>
@@ -131,12 +139,77 @@ export default function ReportView({ route, navigation }: Props) {
             </View>
           ))}
 
-          {scalars.length === 0 && objects.length === 0 && arrays.length === 0 && (
+          {!table && scalars.length === 0 && objects.length === 0 && arrays.length === 0 && (
             <EmptyState icon="file-tray-outline" message="No data for this period." />
           )}
         </>
       )}
     </ScrollView>
+  );
+}
+
+/** Keys the table renderer owns; matrix_days/vehicles are the web's day×vehicle grid, too wide for a phone. */
+const TABLE_KEYS = new Set(['summary', 'columns', 'rows', 'chart', 'matrix_days', 'vehicles', 'notice']);
+
+function TableReport({ table, chart }: { table: ReportTable; chart: unknown }) {
+  const bars = Array.isArray(chart) ? chart.filter((c: any) => c && c.label != null && c.pct != null) : [];
+  return (
+    <>
+      {table.summary.length > 0 && (
+        <View style={styles.kpiGrid}>
+          {table.summary.map((s, i) => (
+            <View key={`${s.label}-${i}`} style={styles.kpi}>
+              <Text style={styles.kpiLabel}>{s.label}</Text>
+              <Text style={styles.kpiValue}>{s.value}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {bars.length > 0 && (
+        <Card style={{ marginTop: spacing.md, gap: spacing.sm }}>
+          {bars.slice(0, 12).map((b: any, i: number) => (
+            <View key={i}>
+              <View style={styles.barHead}>
+                <Text style={styles.barLabel} numberOfLines={1}>{String(b.label)}</Text>
+                <Text style={styles.barValue}>{String(b.valueFmt ?? `${Math.round(Number(b.pct) || 0)}%`)}</Text>
+              </View>
+              <View style={styles.barTrack}>
+                <View style={[styles.barFill, { width: `${Math.max(2, Math.min(100, Number(b.pct) || 0))}%`, backgroundColor: b.color || colors.primaryContainer }]} />
+              </View>
+            </View>
+          ))}
+        </Card>
+      )}
+
+      <Text style={styles.section}>Rows ({table.rows.length})</Text>
+      {table.rows.length === 0 ? (
+        <EmptyState icon="file-tray-outline" message="Nothing in this period." />
+      ) : (
+        table.rows.slice(0, 80).map((row, i) => (
+          <Card key={i} style={styles.rowCard}>
+            <Text style={styles.rowMain}>{row[0]?.text == null ? '—' : String(row[0].text)}</Text>
+            <View style={styles.rowChips}>
+              {table.columns.slice(1).map((c, ci) => {
+                const cell = row[ci + 1];
+                if (!cell || cell.text == null || cell.text === '') return null;
+                return cell.isPill ? (
+                  <Text key={ci} style={[styles.pill, { backgroundColor: cell.pillBg || colors.surfaceContainerHigh, color: cell.pillColor || colors.onSurface }]}>
+                    {String(cell.text)}
+                  </Text>
+                ) : (
+                  <View key={ci} style={styles.chip}>
+                    <Text style={styles.chipKey}>{c.label}</Text>
+                    <Text style={styles.chipVal}>{String(cell.text)}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </Card>
+        ))
+      )}
+      {table.rows.length > 80 && <Text style={styles.more}>Showing first 80 of {table.rows.length}.</Text>}
+    </>
   );
 }
 
@@ -180,4 +253,10 @@ const styles = StyleSheet.create({
   chipKey: { ...type.labelSm, fontSize: 10, color: colors.onSurfaceVariant },
   chipVal: { ...type.bodySm, fontFamily: fonts.monoMedium, color: colors.onSurface },
   more: { ...type.bodySm, color: colors.onSurfaceVariant, fontStyle: 'italic', textAlign: 'center', marginTop: spacing.sm },
+  pill: { ...type.labelSm, fontSize: 11, fontFamily: fonts.sansBold, borderRadius: radius.full, paddingHorizontal: spacing.sm, paddingVertical: 3, overflow: 'hidden', alignSelf: 'center' },
+  barHead: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm },
+  barLabel: { ...type.bodySm, color: colors.onSurface, flex: 1 },
+  barValue: { ...type.bodySm, fontFamily: fonts.monoMedium, color: colors.onSurfaceVariant },
+  barTrack: { height: 8, borderRadius: 4, backgroundColor: colors.surfaceContainerHigh, overflow: 'hidden', marginTop: 4 },
+  barFill: { height: '100%', borderRadius: 4 },
 });

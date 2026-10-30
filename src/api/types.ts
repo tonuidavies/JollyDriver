@@ -143,9 +143,15 @@ export type Reconciliation = {
   returns_recorded?: boolean;
 };
 
+/** Real rows carry id, sale_number, customer_*, expected/collected_amount, status, items. */
 export type DispatchSale = {
   id?: number;
+  sale_number?: number;
   customer_name?: string;
+  customer_phone?: string;
+  expected_amount?: number;
+  collected_amount?: number;
+  status?: string;
   sale_type?: string;
   total?: number;
   amount?: number;

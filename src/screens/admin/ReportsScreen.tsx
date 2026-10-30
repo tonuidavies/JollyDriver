@@ -8,10 +8,10 @@ import { Card, ScreenTitleBar } from '../../components';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
 import { useReportsSummary } from '../../api/hooks';
+import { figure } from '../../api/tables';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Reports'>;
-const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 type Entry =
   | { kind: string; title: string; desc: string; icon: string; screen?: undefined }
@@ -45,6 +45,8 @@ export default function ReportsScreen({ navigation }: Props) {
   const [period, setPeriod] = useState<'7d' | '30d' | '90d'>('7d');
   const summary = useReportsSummary(period);
   const s: any = (summary.data as any) ?? {};
+  // totals arrive pre-formatted: { dispatched: "KES 0", collected: "KES 9,516,508", shortage: "KES 0" }
+  const t: any = s.totals ?? { dispatched: s.dispatched, collected: s.collected, shortage: s.shortages ?? s.shortage };
 
   return (
     <ScrollView
@@ -68,11 +70,11 @@ export default function ReportsScreen({ navigation }: Props) {
       </View>
 
       <View style={styles.kpiRow}>
-        <Kpi label="Dispatched" value={kes(num(s.dispatched ?? s.dispatched_total), false)} />
-        <Kpi label="Collected" value={kes(num(s.collected ?? s.collected_total), false)} tone={colors.success} />
+        <Kpi label="Dispatched" value={kes(figure(t.dispatched), false)} />
+        <Kpi label="Collected" value={kes(figure(t.collected), false)} tone={colors.success} />
       </View>
       <View style={styles.kpiRow}>
-        <Kpi label="Shortages" value={kes(num(s.shortages ?? s.shortage), false)} tone={num(s.shortages ?? s.shortage) > 0 ? colors.error : undefined} />
+        <Kpi label="Shortages" value={kes(figure(t.shortage), false)} tone={figure(t.shortage) > 0 ? colors.error : undefined} />
         <Kpi label="Period" value={String(s.period ?? period).toUpperCase()} />
       </View>
 

@@ -149,3 +149,4 @@ src/
   CRUD, Route Assignments, tracker device management, PayBills & payment channels, SMS.
 
 _The app icon/splash in `assets/` are placeholders — swap in final brand art._
+# JollyDriver

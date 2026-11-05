@@ -1,14 +1,18 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { Screen, Card, ScreenTitleBar, StatusBadge } from '../../components';
+import { Screen, Card, ScreenTitleBar, StatusBadge, PrimaryButton } from '../../components';
 import { Loading, ErrorState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
 import { useDispatchDetail, useDispatchExpenses } from '../../api/hooks';
 import { DispatchExpense, DispatchPayment } from '../../api/types';
 import { RootStackParamList } from '../../navigation/types';
+import { useAuth } from '../../context/AuthContext';
+import { dispatchSheetHtml, loadingSlip, sheetDate, sheetFigures } from '../../utils/dispatchSheet';
+import { DISPATCH_TONE } from '../../components/DispatchCard';
+import { printHtml, shareHtmlAsPdf } from '../../utils/printing';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DispatchReport'>;
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -17,6 +21,8 @@ export default function DispatchReportView({ route, navigation }: Props) {
   const { id, orderNumber } = route.params;
   const { data, isLoading, isError, error, refetch } = useDispatchDetail(id);
   const expenses = useDispatchExpenses(id);
+  const { user } = useAuth();
+  const [busy, setBusy] = useState(false);
 
   const expenseRows: DispatchExpense[] = useMemo(() => {
     const raw = (expenses.data ?? []) as any;
@@ -60,33 +66,52 @@ export default function DispatchReportView({ route, navigation }: Props) {
     );
 
   const items = data.items ?? [];
+  const generatedBy = [user?.first_name, user?.last_name].filter(Boolean).join(' ');
+  const sheetHtml = () => dispatchSheetHtml(data, { generatedBy });
+  const variance = sheetFigures(data).variance;
 
   return (
     <Screen>
       <ScreenTitleBar title={`Report · ${orderNumber ?? data.order_number}`} onBack={() => navigation.goBack()} />
+
+      <View style={styles.printRow}>
+        <PrimaryButton label="Print" icon="print-outline" iconRight={false} variant="dark" style={{ flex: 1 }} disabled={busy}
+          onPress={async () => { setBusy(true); await printHtml(sheetHtml()); setBusy(false); }} />
+        <PrimaryButton label="PDF" icon="share-social-outline" iconRight={false} variant="outline" style={{ flex: 0.7 }} disabled={busy}
+          onPress={async () => { setBusy(true); await shareHtmlAsPdf(sheetHtml(), `Dispatch ${data.order_number}`); setBusy(false); }} />
+        <PrimaryButton label="Slip" icon="receipt-outline" iconRight={false} variant="outline" style={{ flex: 0.7 }}
+          onPress={() => navigation.navigate('Receipt', { receipt: loadingSlip(data) })} />
+      </View>
 
       <Card>
         <Row label="Route" value={data.route?.name ?? '—'} />
         <Row label="Vehicle" value={data.vehicle?.registration_number ?? '—'} />
         <Row label="Driver" value={data.driver?.name || '—'} />
         <Row label="Agent" value={data.agent?.name || '—'} />
-        <Row label="Date" value={data.dispatch_date} />
+        <Row label="Date" value={sheetDate(data.dispatch_date)} />
         <View style={[styles.metaRow, { marginTop: spacing.xs }]}>
           <Text style={styles.metaLabel}>Status</Text>
-          <StatusBadge label={data.status.toUpperCase()} tone={data.status === 'completed' ? 'success' : 'partial'} />
+          <StatusBadge label={data.status.toUpperCase()} tone={DISPATCH_TONE[data.status]} />
         </View>
       </Card>
 
       {/* Reconciliation summary */}
       <Text style={styles.section}>Reconciliation</Text>
       <View style={styles.reconGrid}>
+        {/* the web report's six boxes, same order */}
         <ReconCell label="Dispatched" value={kes(totals.dispatched)} />
         <ReconCell label="Returns" value={kes(totals.returns)} />
-        {totals.lpo > 0 && <ReconCell label="LPO / Credit" value={kes(totals.lpo)} />}
-        {totals.expenses > 0 && <ReconCell label="Expenses" value={kes(totals.expenses)} />}
-        <ReconCell label="Net Expected" value={kes(totals.netExpected)} tone={colors.primary} />
+        <ReconCell label="LPO / Credit" value={kes(totals.lpo)} />
+        <ReconCell label="Approved expenses" value={kes(totals.expenses)} />
         <ReconCell label="Collected" value={kes(totals.collected)} tone={colors.success} />
-        <ReconCell label="Shortage" value={kes(totals.shortage)} tone={totals.shortage > 0 ? colors.error : colors.success} />
+        <ReconCell label="Variance" value={`${variance < 0 ? '-' : ''}${kes(Math.abs(variance))}`} tone={variance < 0 ? colors.error : colors.success} />
+        {/* shortage is only booked when the dispatch is closed */}
+        {data.status === 'completed' && (
+          <>
+            <ReconCell label="Net Expected" value={kes(totals.netExpected)} tone={colors.primary} />
+            <ReconCell label="Shortage booked" value={kes(totals.shortage)} tone={totals.shortage > 0 ? colors.error : colors.success} />
+          </>
+        )}
         {totals.commission > 0 && <ReconCell label="Commission" value={kes(totals.commission)} />}
       </View>
 
@@ -212,8 +237,9 @@ export default function DispatchReportView({ route, navigation }: Props) {
       )}
 
       <View style={styles.sign}>
-        <View style={styles.signBlock}><View style={styles.signLine} /><Text style={styles.signLabel}>Reconciled by (Agent)</Text></View>
-        <View style={styles.signBlock}><View style={styles.signLine} /><Text style={styles.signLabel}>Verified by (Office)</Text></View>
+        {['Dispatched by', 'Confirmed by', 'Salesperson', 'Driver'].map((l) => (
+          <View key={l} style={styles.signBlock}><View style={styles.signLine} /><Text style={styles.signLabel}>{l}</Text></View>
+        ))}
       </View>
     </Screen>
   );
@@ -258,8 +284,9 @@ const styles = StyleSheet.create({
   totalRow: { backgroundColor: colors.surfaceContainerLow },
 
   note: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: spacing.md, fontStyle: 'italic' },
-  sign: { flexDirection: 'row', gap: spacing.lg, marginTop: spacing.xl },
-  signBlock: { flex: 1 },
+  printRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
+  sign: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg, marginTop: spacing.xl },
+  signBlock: { width: '45%', flexGrow: 1, marginTop: spacing.lg },
   signLine: { height: 1, backgroundColor: colors.outline, marginBottom: spacing.xs },
   signLabel: { ...type.labelSm, color: colors.onSurfaceVariant },
 });

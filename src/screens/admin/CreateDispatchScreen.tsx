@@ -11,6 +11,8 @@ import { kes } from '../../utils/format';
 import {
   useRoutes, useVehicles, useDrivers, useAgents, useProducts, useCreateDispatch, useDispatchRegister,
 } from '../../api/hooks';
+import { listDispatches } from '../../api/endpoints';
+import { ymd } from '../../api/dates';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreateDispatch'>;
@@ -104,7 +106,22 @@ export default function CreateDispatchScreen({ navigation }: Props) {
         activate,
       },
       {
-        onSuccess: () => { Alert.alert('Dispatch created', activate ? 'Marked active.' : 'Saved as draft.'); navigation.goBack(); },
+        onSuccess: async (r: any) => {
+          // straight onto the new dispatch, print card up — the web does the same
+          let newId = num(r?.dispatch_id ?? r?.id ?? r?.dispatch?.id ?? r?.data?.id);
+          let orderNumber: string | undefined = r?.order_number ?? r?.dispatch?.order_number;
+          if (!newId) {
+            // response carried no id: it's today's newest dispatch on this vehicle
+            const today = await listDispatches({ date: ymd(), per_page: 50 }).catch(() => [] as any[]);
+            const mine = (Array.isArray(today) ? today : [])
+              .filter((d: any) => num(d.vehicle?.id) === vehicleId)
+              .sort((a: any, b: any) => num(b.id) - num(a.id))[0];
+            newId = num(mine?.id);
+            orderNumber = orderNumber ?? mine?.order_number;
+          }
+          if (newId) navigation.replace('DispatchDetail', { id: newId, orderNumber, justActivated: activate });
+          else { Alert.alert('Dispatch created', activate ? 'Marked active — print it from the dispatch register.' : 'Saved as draft.'); navigation.goBack(); }
+        },
         onError: (e) => Alert.alert('Failed', (e as Error).message),
       }
     );
@@ -184,7 +201,7 @@ export default function CreateDispatchScreen({ navigation }: Props) {
             <Switch value={activate} onValueChange={setActivate} trackColor={{ true: colors.primaryContainer, false: colors.outlineVariant }} thumbColor={colors.surfaceContainerLowest} />
           </View>
 
-          <PrimaryButton label="Create Dispatch" icon="cube-outline" iconRight={false} style={{ marginTop: spacing.lg }} onPress={submit} disabled={create.isPending} />
+          <PrimaryButton label={activate ? 'Create & mark active' : 'Save as draft'} icon="cube-outline" iconRight={false} style={{ marginTop: spacing.lg }} onPress={submit} disabled={create.isPending} />
         </>
       )}
     </ScrollView>

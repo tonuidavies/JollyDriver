@@ -6,7 +6,7 @@ export type RootStackParamList = {
   DriverTabs: undefined;
   AdminTabs: undefined;
   /** Dispatch order detail (driver records collections / admin confirms) */
-  DispatchDetail: { id: number; orderNumber?: string };
+  DispatchDetail: { id: number; orderNumber?: string; justActivated?: boolean };
   /** Per-dispatch reconciliation report (items + matched payments) */
   DispatchReport: { id: number; orderNumber?: string };
   /** POS-style Invoice & Delivery slip; `fresh` = just recorded */

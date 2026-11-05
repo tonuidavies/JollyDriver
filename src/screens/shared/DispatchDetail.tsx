@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, Alert } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { Screen, Card, StatusBadge, PrimaryButton, ScreenTitleBar, Select, PaymentList } from '../../components';
+import { DISPATCH_TONE } from '../../components/DispatchCard';
+import { Screen, Card, StatusBadge, PrimaryButton, ScreenTitleBar, Select, PaymentList, FormModal, Field } from '../../components';
 import { Loading, ErrorState } from '../../components/StateView';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { kes } from '../../utils/format';
@@ -11,7 +12,7 @@ import {
   useDispatchDetail, useRecordCollection, useChangeStatus, useInitiateStk, useStkStatus,
   useRecordSale, useRecordReturns, useRemainingStock, useExpenseCategories, useDispatchExpenses,
   useRecordExpense, useApproveExpense, useRejectExpense, useVoidCollection, useEditCollection,
-  useCustomerSearch, useInvoices, useLpoSales,
+  useCustomerSearch, useInvoices, useLpoSales, useCreateCustomer,
 } from '../../api/hooks';
 import { asTable, rowObjects, figure } from '../../api/tables';
 import {
@@ -20,9 +21,11 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { RootStackParamList } from '../../navigation/types';
 import { receiptFromSale, receiptFromDispatchSale, ReceiptLine } from '../../utils/receipt';
+import { dispatchSheetHtml, loadingSlip, sheetFigures } from '../../utils/dispatchSheet';
+import { printHtml } from '../../utils/printing';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DispatchDetail'>;
-type Sheet = 'collection' | 'sale' | 'returns' | 'expense' | null;
+type Sheet = 'collection' | 'sale' | 'returns' | 'expense' | 'close' | null;
 type PayChannel = 'cash' | 'mpesa_manual' | 'stk';
 type SaleType = 'cash' | 'lpo';
 
@@ -34,10 +37,6 @@ const num = (v: unknown): number => {
 /** Tolerate a bare array, a `{data:[…]}` envelope, or nothing at all. */
 const arr = (v: unknown): any[] =>
   Array.isArray(v) ? v : Array.isArray((v as any)?.data) ? (v as any).data : [];
-
-const STATUS_TONE: Record<DispatchStatus, 'success' | 'partial' | 'pending' | 'error' | 'neutral'> = {
-  draft: 'neutral', pending: 'pending', active: 'partial', completed: 'success', cancelled: 'error',
-};
 
 const EXPENSE_TONE: Record<string, 'success' | 'pending' | 'error' | 'neutral'> = {
   approved: 'success', pending: 'pending', rejected: 'error',
@@ -54,8 +53,12 @@ const entryId = (p: DispatchPayment) => num(p.id);
 const hasEntryId = (p: DispatchPayment) => entryId(p) > 0;
 
 export default function DispatchDetail({ route, navigation }: Props) {
-  const { id } = route.params;
+  const { id, justActivated } = route.params;
   const { activeView, user } = useAuth();
+  // the moment a dispatch goes active the sheet has to be printable — the web
+  // lands on this same page with "Print Dispatch Sheet" ready, so do we
+  const [freshActive, setFreshActive] = useState(!!justActivated);
+  const [printing, setPrinting] = useState(false);
   const { data, isLoading, isError, error, refetch } = useDispatchDetail(id);
   const [showBreakdown, setShowBreakdown] = useState(false);
 
@@ -91,6 +94,10 @@ export default function DispatchDetail({ route, navigation }: Props) {
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [lpoNumber, setLpoNumber] = useState('');
   const [returnQty, setReturnQty] = useState<Record<number, string>>({});
+  // "+ New School" from inside the sale, like the web's Record Sale modal
+  const createCustomer = useCreateCustomer();
+  const [schoolOpen, setSchoolOpen] = useState(false);
+  const [school, setSchool] = useState({ name: '', contact: '', phone: '' });
 
   // expense form
   const [expenseCategory, setExpenseCategory] = useState<number | null>(null);
@@ -507,12 +514,73 @@ export default function DispatchDetail({ route, navigation }: Props) {
     );
   };
 
+  const canPrint = data.status !== 'draft' && data.status !== 'cancelled';
+  const printSheet = async () => {
+    setPrinting(true);
+    await printHtml(dispatchSheetHtml(data, { generatedBy: seller }));
+    setPrinting(false);
+  };
+  const openLoadingSlip = () => navigation.navigate('Receipt', { receipt: loadingSlip(data) });
+
+  /** draft/pending → active, then put the print card in front of them. */
+  const activate = () =>
+    changeStatus.mutate(
+      { id, status: 'active' },
+      {
+        onSuccess: () => { setFreshActive(true); refetch(); },
+        onError: (e) => Alert.alert('Could not activate', (e as Error).message),
+      }
+    );
+  const cancelDispatch = () =>
+    Alert.alert('Cancel this dispatch?', `${data.order_number} will be marked cancelled. Nothing is deleted.`, [
+      { text: 'Keep it', style: 'cancel' },
+      {
+        text: 'Cancel dispatch',
+        style: 'destructive',
+        onPress: () =>
+          changeStatus.mutate(
+            { id, status: 'cancelled' },
+            { onSuccess: () => refetch(), onError: (e) => Alert.alert('Failed', (e as Error).message) }
+          ),
+      },
+    ]);
+  const closeDispatch = () =>
+    changeStatus.mutate(
+      { id, status: 'completed' },
+      {
+        onSuccess: (r: any) => {
+          setSheet(null);
+          if (r?.reconciliation) setLastRecon(r.reconciliation);
+          refetch();
+          Alert.alert('Dispatch closed', "Today's reconciliation is locked in.");
+        },
+        onError: (e) => Alert.alert('Could not close', (e as Error).message),
+      }
+    );
+
+  /** The web's "Close This Dispatch?" review, worked from the same figures as the sheet. */
+  const closeReview = (() => {
+    const f = sheetFigures(data);
+    const salesValue = sales.reduce((s, x) => s + num(x.expected_amount ?? x.total ?? x.amount), 0);
+    const unaccounted = data.unaccounted != null ? num(data.unaccounted) : Math.max(0, f.dispatched - salesValue - f.returns);
+    return { ...f, unaccounted, returnsRecorded: glance?.returned ? glance.returned > 0 : f.returns > 0 };
+  })();
+
   return (
     <Screen bottomPad={120}>
       <ScreenTitleBar
         title={data.order_number}
         onBack={() => navigation.goBack()}
-        right={<StatusBadge label={String(data.status ?? '').toUpperCase()} tone={STATUS_TONE[data.status]} />}
+        right={
+          <>
+            {canPrint && (
+              <Pressable onPress={printSheet} hitSlop={10} disabled={printing} style={styles.printIcon}>
+                {printing ? <ActivityIndicator size="small" color={colors.primary} /> : <Ionicons name="print-outline" size={22} color={colors.primary} />}
+              </Pressable>
+            )}
+            <StatusBadge label={String(data.status ?? '').toUpperCase()} tone={DISPATCH_TONE[data.status]} />
+          </>
+        }
       />
 
       {/* who / where, in one line */}
@@ -522,6 +590,45 @@ export default function DispatchDetail({ route, navigation }: Props) {
         <CrewChip icon="steering" value={data.driver?.name || '—'} />
         <CrewChip icon="account-tie-outline" value={data.agent?.name || '—'} />
       </View>
+
+      {/* just went active → the paperwork comes first */}
+      {freshActive && data.status === 'active' && (
+        <View style={styles.readyCard}>
+          <View style={styles.readyTop}>
+            <View style={styles.readyIcon}><Ionicons name="print" size={26} color={colors.onPrimary} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.readyTitle}>Active — print before the van leaves</Text>
+              <Text style={styles.readySub}>
+                {Math.round(items.reduce((s, it) => s + num(it.quantity), 0))} pcs · {kes(num(data.total_amount))}. Driver and agent sign the sheet; the slip goes with the van.
+              </Text>
+            </View>
+            <Pressable hitSlop={10} onPress={() => setFreshActive(false)}>
+              <Ionicons name="close" size={20} color={colors.onSurfaceVariant} />
+            </Pressable>
+          </View>
+          <View style={styles.readyBtns}>
+            <PrimaryButton label={printing ? 'Opening…' : 'Dispatch sheet'} icon="print-outline" iconRight={false} variant="dark" style={{ flex: 1 }} onPress={printSheet} disabled={printing} />
+            <PrimaryButton label="Loading slip" icon="receipt-outline" iconRight={false} variant="outline" style={{ flex: 1 }} onPress={openLoadingSlip} />
+          </View>
+        </View>
+      )}
+
+      {/* draft / pending: nothing can be sold until someone marks it active */}
+      {isAdmin && (data.status === 'draft' || data.status === 'pending') && (
+        <View style={styles.draftCard}>
+          <MaterialCommunityIcons name="truck-alert-outline" size={26} color={colors.onWarningContainer} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.readyTitle}>{data.status === 'draft' ? 'Draft — not on the road yet' : 'Waiting to start'}</Text>
+            <Text style={styles.readySub}>Mark it active once the van is loaded. The dispatch sheet prints straight after.</Text>
+          </View>
+        </View>
+      )}
+      {isAdmin && (data.status === 'draft' || data.status === 'pending') && (
+        <View style={styles.readyBtns}>
+          <PrimaryButton label="Mark active" icon="play" iconRight={false} variant="dark" style={{ flex: 1.4 }} onPress={activate} disabled={busy} />
+          <PrimaryButton label="Cancel" icon="close-circle-outline" iconRight={false} variant="outline" style={{ flex: 1 }} onPress={cancelDispatch} disabled={busy} />
+        </View>
+      )}
 
       {/* the day as a journey — the next step glows */}
       {glance && (
@@ -626,7 +733,7 @@ export default function DispatchDetail({ route, navigation }: Props) {
 
       {isDriver && data.status === 'pending' && (
         <PrimaryButton label="Van loaded — start the route" variant="dark" icon="play" iconRight={false} style={{ marginTop: spacing.lg, borderRadius: radius.full }}
-          onPress={() => changeStatus.mutate({ id, status: 'active' })} disabled={busy} />
+          onPress={activate} disabled={busy} />
       )}
 
       {canAct && (isDriver || isAdmin) && (
@@ -713,6 +820,10 @@ export default function DispatchDetail({ route, navigation }: Props) {
                 options={customerOpts}
                 onChange={(v) => setCustomerId(num(v))}
               />
+              <Pressable style={styles.newSchool} onPress={() => setSchoolOpen(true)} hitSlop={6}>
+                <Ionicons name="add-circle-outline" size={18} color={colors.secondary} />
+                <Text style={styles.newSchoolText}>New school</Text>
+              </Pressable>
               <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>LPO number</Text>
               <View style={styles.field}><MaterialCommunityIcons name="file-document-outline" size={18} color={colors.onSurfaceVariant} />
                 <TextInput style={[styles.moneyInput, { fontSize: 16 }]} value={lpoNumber} onChangeText={setLpoNumber} placeholder="e.g. LPO-2026-0142" placeholderTextColor={colors.outline} autoCapitalize="characters" />
@@ -993,17 +1104,97 @@ export default function DispatchDetail({ route, navigation }: Props) {
 
       {isAdmin && canAct && (
         <View style={styles.adminActions}>
-          <PrimaryButton label="Confirm Returns" variant="dark" icon="checkmark-circle-outline" iconRight={false} style={{ flex: 1 }}
-            onPress={() => Alert.alert('Confirm', 'Complete this dispatch?', [{ text: 'Cancel', style: 'cancel' }, { text: 'Confirm', onPress: () => changeStatus.mutate({ id, status: 'completed' }) }])} disabled={busy} />
-          <PrimaryButton label="Report" variant="secondary" icon="document-text-outline" iconRight={false} style={{ flex: 1 }}
+          <PrimaryButton label="Mark as Closed" variant="dark" icon="checkmark-circle-outline" iconRight={false}
+            onPress={() => toggle('close')} disabled={busy} />
+          <PrimaryButton label="Report" variant="secondary" icon="document-text-outline" iconRight={false}
             onPress={() => navigation.navigate('DispatchReport', { id, orderNumber: data.order_number })} />
         </View>
       )}
+      {sheet === 'close' && (
+        <Card style={styles.sheet}>
+          <Text style={styles.sheetTitle}>Close this dispatch?</Text>
+          <Text style={styles.hintNote}>This locks in today's reconciliation. Check it first.</Text>
+          <View style={{ marginTop: spacing.md }}>
+            <ReviewRow label="Returns recorded" value={closeReview.returnsRecorded ? 'Yes' : 'No'} tone={closeReview.returnsRecorded ? colors.success : colors.error} />
+            <ReviewRow label="Net expected" value={kes(closeReview.netExpected)} />
+            <ReviewRow label="Collected (KCB + cash)" value={kes(closeReview.collected)} tone={colors.success} />
+            <ReviewRow label="Variance" value={`${closeReview.variance < 0 ? '-' : ''}${kes(Math.abs(closeReview.variance))}`} tone={closeReview.variance < 0 ? colors.error : colors.success} />
+            <ReviewRow label="Unaccounted (not sold, not returned)" value={kes(closeReview.unaccounted)} tone={closeReview.unaccounted > 0 ? colors.error : undefined} />
+            <ReviewRow label="Commission" value={num(data.total_commission) > 0 ? kes(num(data.total_commission)) : 'Not configured'} />
+          </View>
+          {!closeReview.returnsRecorded && (
+            <View style={[styles.closeWarn, { backgroundColor: colors.warningContainer }]}>
+              <Ionicons name="alert-circle-outline" size={18} color={colors.onWarningContainer} />
+              <Text style={styles.closeWarnText}>No returns recorded yet — everything still counts as owed. Record BRING BACK first if bread came back.</Text>
+            </View>
+          )}
+          {closeReview.variance < 0 && (
+            <View style={[styles.closeWarn, { backgroundColor: colors.errorContainer }]}>
+              <Ionicons name="warning-outline" size={18} color={colors.onErrorContainer} />
+              <Text style={styles.closeWarnText}>Short by {kes(Math.abs(closeReview.variance))}. Closing records the shortage against this crew.</Text>
+            </View>
+          )}
+          <View style={styles.readyBtns}>
+            <PrimaryButton label="Keep open" variant="outline" style={{ flex: 1 }} onPress={() => setSheet(null)} />
+            <PrimaryButton label="Close it" icon="lock-closed-outline" iconRight={false} variant="dark" style={{ flex: 1 }} onPress={closeDispatch} disabled={busy} />
+          </View>
+        </Card>
+      )}
+
       {data.status === 'completed' && (
         <PrimaryButton label="View Report" icon="document-text-outline" iconRight={false} style={{ marginTop: spacing.lg }}
           onPress={() => navigation.navigate('DispatchReport', { id, orderNumber: data.order_number })} />
       )}
+
+      {canPrint && (
+        <>
+          <Text style={styles.section}>Paperwork</Text>
+          <View style={styles.paperRow}>
+            <PaperBtn icon="file-document-outline" title="Dispatch sheet" sub="A4 · like the web" onPress={printSheet} busy={printing} />
+            <PaperBtn icon="receipt" title="Loading slip" sub="POS · driver signs" onPress={openLoadingSlip} />
+          </View>
+        </>
+      )}
+      <FormModal visible={schoolOpen} title="New school" onClose={() => setSchoolOpen(false)} submitLabel="Add school" busy={createCustomer.isPending}
+        onSubmit={() => {
+          if (!school.name.trim()) return Alert.alert('Name required');
+          createCustomer.mutate(
+            { name: school.name.trim(), customer_type: 'school', contact_person: school.contact || undefined, phone: school.phone || undefined },
+            {
+              onSuccess: (r: any) => {
+                const newId = num(r?.id ?? r?.customer_id ?? r?.data?.id);
+                setSchoolOpen(false); setSchool({ name: '', contact: '', phone: '' });
+                if (newId) setCustomerId(newId);
+                customers.refetch();
+              },
+              onError: (e) => Alert.alert('Failed', (e as Error).message),
+            }
+          );
+        }}>
+        <Field label="School name" value={school.name} onChangeText={(t) => setSchool((x) => ({ ...x, name: t }))} placeholder="e.g. Brook Day Secondary" autoCapitalize="characters" />
+        <Field label="Contact person (optional)" value={school.contact} onChangeText={(t) => setSchool((x) => ({ ...x, contact: t }))} />
+        <Field label="Phone (optional)" value={school.phone} onChangeText={(t) => setSchool((x) => ({ ...x, phone: t }))} keyboardType="phone-pad" />
+      </FormModal>
     </Screen>
+  );
+}
+
+function ReviewRow({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <View style={styles.reviewRow}>
+      <Text style={styles.reviewLabel}>{label}</Text>
+      <Text style={[styles.reviewValue, tone ? { color: tone } : null]}>{value}</Text>
+    </View>
+  );
+}
+
+function PaperBtn({ icon, title, sub, onPress, busy }: { icon: any; title: string; sub: string; onPress: () => void; busy?: boolean }) {
+  return (
+    <Pressable style={({ pressed }) => [styles.paperBtn, pressed && { opacity: 0.85 }]} onPress={onPress} disabled={busy}>
+      {busy ? <ActivityIndicator size={28} color={colors.primary} /> : <MaterialCommunityIcons name={icon} size={28} color={colors.primary} />}
+      <Text style={styles.paperTitle}>{title}</Text>
+      <Text style={styles.paperSub}>{busy ? 'Opening printer…' : sub}</Text>
+    </Pressable>
   );
 }
 
@@ -1068,7 +1259,26 @@ function MethodTab({ label, icon, active, onPress }: { label: string; icon: any;
 }
 
 const styles = StyleSheet.create({
-  crewStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: -spacing.sm },
+  printIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center' },
+  readyCard: { backgroundColor: colors.successContainer, borderRadius: radius.card, padding: spacing.md, marginTop: spacing.md, borderWidth: 2, borderColor: colors.success },
+  readyTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  readyIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.success, alignItems: 'center', justifyContent: 'center' },
+  readyTitle: { ...type.titleMd, fontFamily: fonts.sansBold, color: colors.onSurface },
+  readySub: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: 2 },
+  readyBtns: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  draftCard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.warningContainer, borderRadius: radius.card, padding: spacing.md, marginTop: spacing.md },
+  reviewRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.outlineVariant, gap: spacing.md },
+  reviewLabel: { ...type.bodySm, color: colors.onSurfaceVariant, flex: 1 },
+  reviewValue: { ...type.titleMd, fontFamily: fonts.monoSemibold, color: colors.onSurface },
+  closeWarn: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start', borderRadius: radius.md, padding: spacing.sm, marginTop: spacing.md },
+  closeWarnText: { ...type.bodySm, color: colors.onSurface, flex: 1 },
+  newSchool: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: spacing.sm },
+  newSchoolText: { ...type.bodySm, fontFamily: fonts.sansBold, color: colors.secondary },
+  paperRow: { flexDirection: 'row', gap: spacing.sm },
+  paperBtn: { flex: 1, alignItems: 'center', backgroundColor: colors.surfaceContainerLowest, borderWidth: 1, borderColor: colors.outlineVariant, borderRadius: radius.card, paddingVertical: spacing.md, gap: 2 },
+  paperTitle: { ...type.titleMd, fontFamily: fonts.sansBold, color: colors.onSurface, marginTop: spacing.xs },
+  paperSub: { ...type.labelSm, color: colors.onSurfaceVariant },
+  crewStrip:{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: -spacing.sm },
   crewChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surfaceContainerHigh, borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 6, maxWidth: '48%' },
   crewText: { ...type.bodySm, fontSize: 13, fontFamily: fonts.sansSemibold, color: colors.onSurface, flexShrink: 1 },
 
@@ -1177,5 +1387,5 @@ const styles = StyleSheet.create({
   itemSub: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: 2 },
   itemSubtotal: { ...type.labelSm, fontSize: 14, fontFamily: fonts.monoSemibold, color: colors.onSurface },
 
-  adminActions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
+  adminActions: { gap: spacing.sm, marginTop: spacing.lg },
 });

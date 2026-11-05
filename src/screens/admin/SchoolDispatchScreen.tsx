@@ -113,9 +113,15 @@ export default function SchoolDispatchScreen({ navigation }: Props) {
       {
         onSuccess: (r: any) => {
           const inv = r?.invoice_number ?? r?.invoice?.invoice_number;
+          const newId = num(r?.dispatch_id ?? r?.id ?? r?.dispatch?.id);
+          if (newId) {
+            // land on it with the sheet and the delivery slip one tap away
+            navigation.replace('DispatchDetail', { id: newId, orderNumber: r?.order_number });
+            return;
+          }
           Alert.alert(
             'School dispatch created',
-            `Delivered, invoiced and completed.${inv ? `\nInvoice: ${inv}` : ''}`
+            `Delivered, invoiced and completed.${inv ? `\nInvoice: ${inv}` : ''}\nPrint it from the dispatch register.`
           );
           navigation.goBack();
         },

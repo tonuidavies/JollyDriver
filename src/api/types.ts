@@ -103,6 +103,8 @@ export type DispatchOrder = {
   net_expected?: number;
   shortage_amount?: number;
   route: DispatchRef | null;
+  /** Set on School Dispatches (dispatch_type 'school'), which have no route */
+  customer?: { id: number; name: string } | null;
   vehicle: VehicleRef | null;
   driver: DispatchRef | null;
   agent: DispatchRef | null;
@@ -200,7 +202,6 @@ export type DispatchDetail = DispatchOrder & {
   expenses?: DispatchExpense[];
   /** 'route' | 'school' */
   dispatch_type?: string;
-  customer?: { id: number; name: string } | null;
   lpo_value?: number;
   expenses_value?: number;
   total_commission?: number;
@@ -372,11 +373,13 @@ export type Invoice = {
   customer_name?: string;
   delivery_note_number?: string;
   lpo_number?: string;
+  /** invoices/list sends subtotal / paid_amount / balance / is_overdue */
+  subtotal?: Num;
+  paid_amount?: Num;
+  balance?: Num;
+  is_overdue?: boolean;
   total?: Num;
   amount?: Num;
-  paid?: Num;
-  balance?: Num;
-  balance_due?: Num;
   issued_on?: string;
   due_date?: string;
   status: InvoiceStatus;

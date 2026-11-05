@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 
 import { Screen, ScreenTitleBar, PrimaryButton } from '../../components';
 import PosReceipt from '../../components/PosReceipt';
 import { colors, type, fonts, spacing, radius } from '../../theme';
 import { receiptHtml, receiptTotals, ksh } from '../../utils/receipt';
+import { printHtml, shareHtmlAsPdf } from '../../utils/printing';
 import { RootStackParamList } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Receipt'>;
@@ -19,30 +18,15 @@ export default function ReceiptScreen({ route, navigation }: Props) {
   const total = receiptTotals(receipt).total;
 
   const print = async () => {
-    try {
-      setBusy(true);
-      await Print.printAsync({ html: receiptHtml(receipt) });
-    } catch (e) {
-      Alert.alert('Could not print', (e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    setBusy(true);
+    await printHtml(receiptHtml(receipt));
+    setBusy(false);
   };
 
   const share = async () => {
-    try {
-      setBusy(true);
-      const { uri } = await Print.printToFileAsync({ html: receiptHtml(receipt) });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: `Invoice ${receipt.invoiceNumber}`, UTI: 'com.adobe.pdf' });
-      } else {
-        Alert.alert('Saved', uri);
-      }
-    } catch (e) {
-      Alert.alert('Could not share', (e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    setBusy(true);
+    await shareHtmlAsPdf(receiptHtml(receipt), `Invoice ${receipt.invoiceNumber}`);
+    setBusy(false);
   };
 
   return (

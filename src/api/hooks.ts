@@ -45,10 +45,10 @@ export function useDispatches(date = ymd(), status?: DispatchStatus) {
 }
 
 /** Full dispatch register (all dates), optionally filtered by status. */
-export function useDispatchRegister(status?: DispatchStatus) {
+export function useDispatchRegister(status?: DispatchStatus, perPage = 50) {
   return useQuery({
-    queryKey: ['dispatch', 'register', status ?? 'all'],
-    queryFn: () => api.listDispatches({ status, per_page: 50 }),
+    queryKey: ['dispatch', 'register', status ?? 'all', perPage],
+    queryFn: () => api.listDispatches({ status, per_page: perPage }),
   });
 }
 

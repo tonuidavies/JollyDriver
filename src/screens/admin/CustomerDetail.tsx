@@ -110,7 +110,8 @@ export default function CustomerDetail({ route, navigation }: Props) {
             ) : (
               theirInvoices.map((inv, i) => {
                 const st = String(inv.status || 'issued');
-                const bal = num(inv.balance ?? inv.balance_due ?? (num(inv.total) - num(inv.paid)));
+                const total = num(inv.subtotal ?? inv.total ?? inv.amount);
+                const bal = num(inv.balance ?? total - num(inv.paid_amount));
                 return (
                   <Card key={inv.id ?? i} style={styles.invRow}>
                     <View style={{ flex: 1 }}>
@@ -121,7 +122,7 @@ export default function CustomerDetail({ route, navigation }: Props) {
                       </Text>
                     </View>
                     <View style={{ alignItems: 'flex-end', gap: spacing.xs }}>
-                      <Text style={styles.invAmt}>{kes(bal || num(inv.total ?? inv.amount), false)}</Text>
+                      <Text style={styles.invAmt}>{kes(bal || total, false)}</Text>
                       <StatusBadge label={st.replace('_', ' ').toUpperCase()} tone={TONE[st] ?? 'neutral'} mono={false} />
                     </View>
                   </Card>

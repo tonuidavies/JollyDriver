@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, Pressable, StyleSheet, ScrollView, RefreshControl, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { Card, ScreenTitleBar, StatusBadge, FormModal, Field, Select } from '../../components';
@@ -11,9 +12,26 @@ import { ymd } from '../../api/dates';
 import { useInvoices, useRecordAccountPayment } from '../../api/hooks';
 import { PaymentMethod } from '../../api/types';
 import { RootStackParamList } from '../../navigation/types';
+import { Receipt } from '../../utils/receipt';
+import { sheetDate } from '../../utils/dispatchSheet';
+
+/** invoices/list has no line items — the slip carries the invoice total as one delivered line. */
+const invoiceSlip = (inv: any): Receipt => ({
+  invoiceNumber: String(inv.invoice_number || `INV-${inv.id}`),
+  accountNumber: inv.customer_phone || undefined,
+  deliveryNote: inv.delivery_note_number || undefined,
+  lpoNumber: inv.lpo_number || undefined,
+  issuedAt: String(inv.issued_on || inv.created_on || new Date().toISOString()).replace(' ', 'T'),
+  salesPerson: '',
+  billTo: [String(inv.customer_name || 'CUSTOMER').toUpperCase(), inv.due_date ? `DUE ${sheetDate(inv.due_date).toUpperCase()}` : ''].filter(Boolean),
+  lines: [{ code: '', description: `GOODS DELIVERED${inv.lpo_number ? ` · LPO ${inv.lpo_number}` : ''}`, qty: 1, price: invoiceTotal(inv), discPct: 0 }],
+  saleType: 'lpo',
+});
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Invoices'>;
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const invoiceTotal = (inv: any) => num(inv.subtotal ?? inv.total ?? inv.amount);
+const invoiceBalance = (inv: any) => num(inv.balance ?? invoiceTotal(inv) - num(inv.paid_amount));
 
 const FILTERS = [
   { label: 'All', value: undefined },
@@ -101,19 +119,27 @@ export default function InvoicesScreen({ navigation }: Props) {
           <EmptyState icon="receipt-outline" message="No invoices." />
         ) : (
           list.map((inv: any, i: number) => {
-            const bal = num(inv.balance ?? inv.balance_due ?? (num(inv.total) - num(inv.paid)));
-            const st = String(inv.status || 'issued');
+            const bal = invoiceBalance(inv);
+            const raw = String(inv.status || 'issued');
+            // the list flags overdue separately from status, like the web's red row
+            const st = inv.is_overdue && raw !== 'paid' ? 'overdue' : raw;
             return (
               <Pressable key={inv.id ?? i} onPress={() => bal > 0 && setPayFor(inv)}>
                 <Card style={styles.row}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.inv}>{inv.invoice_number || inv.number || `Invoice #${inv.id}`}</Text>
-                    <Text style={styles.cust}>{inv.customer_name || inv.customer || ''}{inv.due_date ? ` · due ${inv.due_date}` : ''}</Text>
+                    <View style={styles.top}>
+                      <Text style={styles.inv} numberOfLines={1}>{inv.invoice_number || inv.number || `Invoice #${inv.id}`}</Text>
+                      <StatusBadge label={st.replace('_', ' ').toUpperCase()} tone={TONE[st] ?? 'neutral'} mono={false} />
+                    </View>
+                    <Text style={styles.cust} numberOfLines={1}>{inv.customer_name || inv.customer || ''}</Text>
+                    <Text style={styles.meta}>
+                      {kes(invoiceTotal(inv))}{inv.due_date ? `  ·  due ${sheetDate(inv.due_date)}` : ''}
+                    </Text>
+                    {bal > 0 && <Text style={styles.bal}>Owes {kes(bal)} · tap to pay</Text>}
                   </View>
-                  <View style={{ alignItems: 'flex-end', gap: spacing.xs }}>
-                    <Text style={styles.amt}>{kes(num(inv.total ?? inv.amount), false)}</Text>
-                    <StatusBadge label={st.replace('_', ' ').toUpperCase()} tone={TONE[st] ?? 'neutral'} mono={false} />
-                  </View>
+                  <Pressable hitSlop={8} style={styles.printBtn} onPress={() => navigation.navigate('Receipt', { receipt: invoiceSlip(inv) })}>
+                    <Ionicons name="print-outline" size={20} color={colors.primary} />
+                  </Pressable>
                 </Card>
               </Pressable>
             );
@@ -146,9 +172,12 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.primaryContainer },
   chipText: { ...type.bodySm, fontFamily: type.titleMd.fontFamily, color: colors.onSurfaceVariant },
   row: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
-  inv: { ...type.titleMd, fontFamily: fonts.sansBold, color: colors.onSurface },
+  top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  inv: { ...type.titleMd, fontFamily: fonts.sansBold, color: colors.onSurface, flexShrink: 1 },
+  meta: { ...type.labelSm, fontSize: 13, fontFamily: fonts.monoSemibold, color: colors.onSurface, marginTop: 2 },
   cust: { ...type.bodySm, color: colors.onSurfaceVariant, marginTop: 2 },
-  amt: { ...type.labelSm, fontSize: 14, fontFamily: fonts.monoSemibold, color: colors.onSurface },
+  bal: { ...type.labelSm, color: colors.error, marginTop: 2 },
+  printBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center', marginLeft: spacing.sm },
   note: { ...type.bodySm, color: colors.onSurfaceVariant, fontStyle: 'italic', marginTop: spacing.sm },
   payFor: { ...type.bodyLg, color: colors.onSurfaceVariant },
 });
